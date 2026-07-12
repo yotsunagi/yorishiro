@@ -912,4 +912,302 @@ mod tests {
         let listed = rest_json_body(response).await;
         assert_eq!(listed.as_array().unwrap().len(), 0);
     }
+
+    /// relations向けのフィクスチャ: task/projectの2 entity_typeとbelongs_to relation_typeを
+    /// 持つスキーマを登録し、task/projectのエンティティを1件ずつ作って両IDを返す。
+    async fn seed_task_and_project(
+        app: &Router,
+        schema_auth: &str,
+        write_auth: &str,
+    ) -> (String, String) {
+        let response = rest_request(
+            app,
+            "POST",
+            "/api/schemas",
+            Some(schema_auth),
+            Some(serde_json::json!({
+                "name": "task-management",
+                "entity_types": {
+                    "task": { "fields": { "title": { "type": "string", "required": true } } },
+                    "project": { "fields": { "name": { "type": "string", "required": true } } }
+                },
+                "relation_types": {
+                    "belongs_to": { "source": "task", "target": "project" }
+                },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = rest_request(
+            app,
+            "POST",
+            "/api/entities",
+            Some(write_auth),
+            Some(serde_json::json!({
+                "schema_name": "task-management",
+                "entity_type": "task",
+                "data": { "title": "buy milk" },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let task_id = rest_json_body(response).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = rest_request(
+            app,
+            "POST",
+            "/api/entities",
+            Some(write_auth),
+            Some(serde_json::json!({
+                "schema_name": "task-management",
+                "entity_type": "project",
+                "data": { "name": "groceries" },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let project_id = rest_json_body(response).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        (task_id, project_id)
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rest_relation_crud_round_trip(pool: PgPool) {
+        let tenant_id = seed_tenant(&pool).await;
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+            .await
+            .unwrap();
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let schema_auth = format!("Bearer {}", schema_key.plaintext);
+        let write_auth = format!("Bearer {}", write_key.plaintext);
+
+        let (task_id, project_id) = seed_task_and_project(&app, &schema_auth, &write_auth).await;
+
+        let create_body = serde_json::json!({
+            "source_id": task_id,
+            "target_id": project_id,
+            "relation_type": "belongs_to",
+        });
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/relations",
+            Some(&write_auth),
+            Some(create_body.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = rest_json_body(response).await;
+        let relation_id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["relation_type"], "belongs_to");
+
+        // 同一のリレーションの重複作成は409。
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/relations",
+            Some(&write_auth),
+            Some(create_body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // relation_typeのsource/targetと矛盾する向き（project→task）は422。
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/relations",
+            Some(&write_auth),
+            Some(serde_json::json!({
+                "source_id": project_id,
+                "target_id": task_id,
+                "relation_type": "belongs_to",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let response = rest_request(
+            &app,
+            "GET",
+            &format!("/api/relations/{relation_id}"),
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let fetched = rest_json_body(response).await;
+        assert_eq!(fetched["id"], relation_id.as_str());
+
+        let response = rest_request(
+            &app,
+            "GET",
+            &format!("/api/relations?source_id={task_id}"),
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let listed = rest_json_body(response).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+
+        let response = rest_request(
+            &app,
+            "DELETE",
+            &format!("/api/relations/{relation_id}"),
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = rest_request(
+            &app,
+            "GET",
+            &format!("/api/relations/{relation_id}"),
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rest_schema_endpoints_round_trip(pool: PgPool) {
+        let tenant_id = seed_tenant(&pool).await;
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+            .await
+            .unwrap();
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let schema_auth = format!("Bearer {}", schema_key.plaintext);
+        let write_auth = format!("Bearer {}", write_key.plaintext);
+
+        // スキーマ登録はschema scope必須: write scopeキーでは403。
+        let definition_v1 = serde_json::json!({
+            "name": "task-management",
+            "entity_types": {
+                "task": { "fields": { "title": { "type": "string", "required": true } } }
+            },
+        });
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&write_auth),
+            Some(definition_v1.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(definition_v1),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = rest_json_body(response).await;
+        assert_eq!(created["schema"]["version"], 1);
+        assert_eq!(created["diff"]["is_breaking"], false);
+        let schema_v1_id = created["schema"]["id"].as_str().unwrap().to_string();
+
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/schemas/active/task-management",
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let active = rest_json_body(response).await;
+        assert_eq!(active["id"], schema_v1_id.as_str());
+
+        let response = rest_request(
+            &app,
+            "GET",
+            &format!("/api/schemas/{schema_v1_id}"),
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // entity_typeのJSON Schema投影。requiredにtitleが含まれる。
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/schemas/active/task-management/entity-types/task/json-schema",
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json_schema = rest_json_body(response).await;
+        assert_eq!(json_schema["type"], "object");
+        assert!(
+            json_schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("title"))
+        );
+
+        // 必須フィールド追加を含むv2は破壊的変更としてdiffに報告され、activeが切り替わる。
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(serde_json::json!({
+                "name": "task-management",
+                "entity_types": {
+                    "task": {
+                        "fields": {
+                            "title": { "type": "string", "required": true },
+                            "due": { "type": "string", "required": true }
+                        }
+                    }
+                },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created_v2 = rest_json_body(response).await;
+        assert_eq!(created_v2["schema"]["version"], 2);
+        assert_eq!(created_v2["diff"]["is_breaking"], true);
+
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/schemas/active/task-management",
+            Some(&write_auth),
+            None,
+        )
+        .await;
+        let active = rest_json_body(response).await;
+        assert_eq!(active["version"], 2);
+    }
 }
