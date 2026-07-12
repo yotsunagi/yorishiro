@@ -120,3 +120,34 @@ where
         })
     }
 }
+
+/// `Authorized<R>`のコネクション非保持版。認証と`R`のscope検証だけを行い、
+/// DBコネクションは取得しない。埋め込み生成のような時間のかかる処理を挟んでから
+/// DBへアクセスするハンドラ（検索）では、`Authorized<R>`を使うと埋め込み生成中も
+/// プール接続を占有してしまうため、こちらを使って処理後に自前で
+/// `TenantDb::acquire_for_tenant`すること。
+pub struct Verified<R> {
+    pub ctx: auth::AuthContext,
+    _scope: PhantomData<R>,
+}
+
+impl<S, R> FromRequestParts<S> for Verified<R>
+where
+    TenantDb: FromRef<S>,
+    S: Send + Sync,
+    R: RequiredScope,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let presented_key = extract_bearer_key(parts)?;
+
+        let db = TenantDb::from_ref(state);
+        let ctx = auth::authorize_scope(&db, presented_key, R::SCOPE).await?;
+
+        Ok(Verified {
+            ctx,
+            _scope: PhantomData,
+        })
+    }
+}

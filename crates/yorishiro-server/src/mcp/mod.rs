@@ -68,6 +68,17 @@ pub(super) enum AuthzOutcome {
     ScopeDenied(CallToolResult),
 }
 
+fn extract_bearer_key(parts: &Parts) -> Result<&str, ErrorData> {
+    parts
+        .headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            ErrorData::invalid_request("missing or malformed Authorization header", None)
+        })
+}
+
 /// 全ツールハンドラの唯一の入口。この関数を経由しない限り`&mut PgConnection`を
 /// 得る手段がない構造にすることで、スコープチェックの呼び忘れを構造的に防ぐ。
 /// 認証・認可のコアロジック自体は`yorishiro_core::auth::authorize`にREST側と
@@ -79,19 +90,41 @@ pub(super) async fn authorize(
     parts: &Parts,
     required: ApiKeyScope,
 ) -> Result<AuthzOutcome, ErrorData> {
-    let presented_key = parts
-        .headers
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| {
-            ErrorData::invalid_request("missing or malformed Authorization header", None)
-        })?;
+    let presented_key = extract_bearer_key(parts)?;
 
     match auth::authorize(&state.tenant_db, presented_key, required).await {
         Ok((ctx, conn)) => Ok(AuthzOutcome::Authorized(Authorized { ctx, conn })),
         Err(err @ YorishiroError::ScopeInsufficient { .. }) => {
             Ok(AuthzOutcome::ScopeDenied(err_to_tool_result(err)))
+        }
+        Err(YorishiroError::Unauthenticated) => {
+            Err(ErrorData::invalid_request("authentication failed", None))
+        }
+        Err(err) => Err(ErrorData::internal_error(err.to_string(), None)),
+    }
+}
+
+/// `authorize`のコネクション非保持版の結果。`AuthzOutcome`と同じ2分法だが、
+/// 成功時にコネクションを含まない。
+pub(super) enum ScopeOutcome {
+    Verified(AuthContext),
+    ScopeDenied(CallToolResult),
+}
+
+/// `authorize`のコネクション非保持版。埋め込み生成のような時間のかかる処理を挟む
+/// ツール（検索）で、その間プール接続を占有しないために使う。処理後のDBアクセスは
+/// `state.tenant_db.acquire_for_tenant`で自前取得すること。
+pub(super) async fn authorize_scope_only(
+    state: &AppState,
+    parts: &Parts,
+    required: ApiKeyScope,
+) -> Result<ScopeOutcome, ErrorData> {
+    let presented_key = extract_bearer_key(parts)?;
+
+    match auth::authorize_scope(&state.tenant_db, presented_key, required).await {
+        Ok(ctx) => Ok(ScopeOutcome::Verified(ctx)),
+        Err(err @ YorishiroError::ScopeInsufficient { .. }) => {
+            Ok(ScopeOutcome::ScopeDenied(err_to_tool_result(err)))
         }
         Err(YorishiroError::Unauthenticated) => {
             Err(ErrorData::invalid_request("authentication failed", None))

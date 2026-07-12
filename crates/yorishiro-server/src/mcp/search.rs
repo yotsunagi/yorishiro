@@ -7,10 +7,11 @@ use rmcp::tool;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use yorishiro_core::YorishiroError;
 use yorishiro_core::auth::ApiKeyScope;
 use yorishiro_core::search;
 
-use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
+use super::{ScopeOutcome, YorishiroMcpServer, authorize_scope_only, err_to_tool_result, ok_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchEntitiesArgs {
@@ -31,9 +32,9 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<SearchEntitiesArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
+        let ctx = match authorize_scope_only(&self.state, &parts, ApiKeyScope::Read).await? {
+            ScopeOutcome::Verified(ctx) => ctx,
+            ScopeOutcome::ScopeDenied(result) => return Ok(result),
         };
 
         let default = search::SearchQuery::default();
@@ -42,17 +43,25 @@ impl YorishiroMcpServer {
             limit: args.limit.unwrap_or(default.limit),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        let result = search::search_by_text(
-            authorized.conn(),
-            tenant_id,
-            self.state.embedding_provider.as_ref(),
-            &args.query_text,
-            query,
-        )
-        .await;
+        // 埋め込み生成はDBコネクション取得より先に行う（RESTアダプタと同じ理由:
+        // LocalOnnxプロバイダの直列化待ちの間、プール接続を占有しない）。
+        let vector =
+            match search::embed_query(self.state.embedding_provider.as_ref(), &args.query_text)
+                .await
+            {
+                Ok(vector) => vector,
+                Err(err) => return Ok(err_to_tool_result(err)),
+            };
 
-        match result {
+        let tenant_id = ctx.tenant_id;
+        let mut conn = match self.state.tenant_db.acquire_for_tenant(tenant_id).await {
+            Ok(conn) => conn,
+            Err(err) => {
+                return Ok(err_to_tool_result(YorishiroError::Internal(err.into())));
+            }
+        };
+
+        match search::search_by_vector(&mut conn, tenant_id, vector, query).await {
             Ok(hits) => ok_json(hits),
             Err(err) => Ok(err_to_tool_result(err)),
         }

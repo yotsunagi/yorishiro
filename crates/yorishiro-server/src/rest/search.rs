@@ -2,9 +2,10 @@ use axum::Json;
 use axum::extract::{Query, State};
 use serde::Deserialize;
 use utoipa::IntoParams;
+use yorishiro_core::YorishiroError;
 use yorishiro_core::search::{self, SearchHit};
 
-use crate::auth::{Authorized, ReadScope};
+use crate::auth::{ReadScope, Verified};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -28,7 +29,7 @@ pub struct SearchEntitiesParams {
 )]
 pub async fn search_entities(
     State(state): State<AppState>,
-    mut authorized: Authorized<ReadScope>,
+    verified: Verified<ReadScope>,
     Query(params): Query<SearchEntitiesParams>,
 ) -> Result<Json<Vec<SearchHit>>, ApiError> {
     let default = search::SearchQuery::default();
@@ -37,14 +38,17 @@ pub async fn search_entities(
         limit: params.limit.unwrap_or(default.limit),
     };
 
-    let tenant_id = authorized.ctx.tenant_id;
-    let hits = search::search_by_text(
-        authorized.conn(),
-        tenant_id,
-        state.embedding_provider.as_ref(),
-        &params.query_text,
-        query,
-    )
-    .await?;
+    // 埋め込み生成はDBコネクション取得より先に行う。LocalOnnxプロバイダでは推論が
+    // プロセス内で直列化されるため、コネクションを握ったまま待つとプール枯渇が
+    // 検索以外のエンドポイントにも波及する。
+    let vector = search::embed_query(state.embedding_provider.as_ref(), &params.query_text).await?;
+
+    let tenant_id = verified.ctx.tenant_id;
+    let mut conn = state
+        .tenant_db
+        .acquire_for_tenant(tenant_id)
+        .await
+        .map_err(|err| ApiError(YorishiroError::Internal(err.into())))?;
+    let hits = search::search_by_vector(&mut conn, tenant_id, vector, query).await?;
     Ok(Json(hits))
 }

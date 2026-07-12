@@ -63,18 +63,27 @@ impl SearchRow {
     }
 }
 
-/// クエリテキストを埋め込み、`entities.embedding`列に対するコサイン距離（HNSWインデックス
-/// `entities_embedding_hnsw`利用）で近い順にentityを返す。embeddingが未設定（NULL）の
-/// entityは対象外（x-embedフィールドを持たないentity_typeや、embedding生成がまだ
-/// 行われていないentity）。
-pub async fn search_by_text(
-    conn: &mut PgConnection,
-    tenant_id: Uuid,
+/// クエリテキストを埋め込みベクトルへ変換する。`search_by_vector`と組にして使う。
+/// リクエスト経路ではDBコネクションを取得する前にこちらを先に呼ぶこと:
+/// 埋め込み生成は外部API呼び出しやローカル推論の直列化待ちで長時間かかりうるため、
+/// コネクションを保持したまま待つとプール枯渇が無関係なエンドポイントへ波及する。
+pub async fn embed_query(
     provider: &dyn EmbeddingProvider,
     query_text: &str,
+) -> Result<Vec<f32>, YorishiroError> {
+    provider.embed(query_text).await
+}
+
+/// 埋め込み済みのクエリベクトルで、`entities.embedding`列に対するコサイン距離
+/// （HNSWインデックス`entities_embedding_hnsw`利用）で近い順にentityを返す。
+/// embeddingが未設定（NULL）のentityは対象外（x-embedフィールドを持たない
+/// entity_typeや、embedding生成がまだ行われていないentity）。
+pub async fn search_by_vector(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    vector: Vec<f32>,
     query: SearchQuery,
 ) -> Result<Vec<SearchHit>, YorishiroError> {
-    let vector = provider.embed(query_text).await?;
     let limit = query.limit.clamp(1, 200);
 
     let rows = sqlx::query_as::<_, SearchRow>(
@@ -96,6 +105,20 @@ pub async fn search_by_text(
     .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     Ok(rows.into_iter().map(SearchRow::into_hit).collect())
+}
+
+/// `embed_query` + `search_by_vector`の合成。埋め込み生成中も`conn`を保持し続けるため、
+/// リクエスト経路では使わず、コネクション保持が問題にならないテスト・バッチ用途に限ること
+/// （リクエスト経路のハンドラはコネクション取得前に`embed_query`を呼ぶ）。
+pub async fn search_by_text(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    provider: &dyn EmbeddingProvider,
+    query_text: &str,
+    query: SearchQuery,
+) -> Result<Vec<SearchHit>, YorishiroError> {
+    let vector = embed_query(provider, query_text).await?;
+    search_by_vector(conn, tenant_id, vector, query).await
 }
 
 #[cfg(test)]

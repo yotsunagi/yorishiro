@@ -31,7 +31,8 @@ tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 uuid = { version = "1", features = ["serde"] }
-ort = { version = "2.0.0-rc.12", features = ["ndarray"] }
+# rc版はマイナー更新でもAPIが壊れうるためexact pin。更新は`cargo update -p ort`等で明示的に行う。
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }

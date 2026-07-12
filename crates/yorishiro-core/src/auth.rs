@@ -201,6 +201,34 @@ pub async fn authorize(
     Ok((ctx, conn))
 }
 
+/// `authorize`のコネクション非保持版。埋め込み生成のような時間のかかる処理を挟んでから
+/// DBへアクセスする経路（検索クエリ）で使う。`authorize`はコネクションをハンドラの
+/// 生存期間中ずっと保持するため、埋め込み生成（LocalOnnxではプロセス内直列化のため
+/// 待ち時間に上限がない）の間プール接続を占有してしまい、プール枯渇が無関係な
+/// エンドポイントへ波及する。この関数は認証・scope検証のみ行い、`last_used_at`の
+/// 更新は短命のコネクションで済ませて即座に返却する。
+pub async fn authorize_scope(
+    tenant_db: &TenantDb,
+    presented_key: &str,
+    required: ApiKeyScope,
+) -> Result<AuthContext, YorishiroError> {
+    let ctx = authenticate(tenant_db.pool(), presented_key).await?;
+    require_scope(&ctx, required)?;
+
+    match tenant_db.acquire_for_tenant(ctx.tenant_id).await {
+        Ok(mut conn) => {
+            if let Err(err) = touch_last_used(&mut conn, ctx.tenant_id, ctx.api_key_id).await {
+                tracing::warn!(error = %err, "failed to update api key last_used_at");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to acquire connection to touch last_used_at");
+        }
+    }
+
+    Ok(ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;

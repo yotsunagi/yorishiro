@@ -37,6 +37,11 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # ort-sysがビルド時にonnxruntimeバイナリを展開する先。デフォルトのキャッシュ
+          # 対象（~/.cargo, ./target）に含まれないため、これを保存しないとウォーム
+          # キャッシュの2回目以降のCIでリンク時にライブラリが見つからず失敗する。
+          cache-directories: ~/.cache/ort.pyke.io
 
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --no-default-features --features postgres

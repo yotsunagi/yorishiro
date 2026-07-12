@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use ort::session::Session;
@@ -9,6 +10,17 @@ use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
 use crate::embedding::EmbeddingProvider;
 use crate::error::YorishiroError;
+
+/// `max_sequence_length`の下限。tokenizersはtruncation時に特殊トークン数
+/// （BERT系で2〜3）を`max_length`から減算するため、それを下回る値はunderflow
+/// （releaseビルドではラップアラウンドしtruncation実質無効化）を引き起こす。
+/// 実用上も極端に短いシーケンス長に意味はないため、余裕を持った下限で弾く。
+const MIN_SEQUENCE_LENGTH: usize = 16;
+
+/// 1回のembed呼び出しの待ち時間上限。推論はプロセス内で直列化されるため、
+/// 先行リクエストの滞留で待ち時間が無制限に伸びることを防ぐ
+/// （OpenAI互換プロバイダのHTTPタイムアウトに相当する安全弁）。
+const EMBED_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct LocalOnnxConfig {
     pub model_path: PathBuf,
@@ -22,7 +34,10 @@ pub struct LocalOnnxConfig {
 }
 
 /// ローカルのONNXモデル（BERT系エンコーダ）で埋め込みを生成するプロバイダ。
-/// 外部サービスへの依存なしで動くため、閉域環境やオフライン開発で使う。
+/// 実行時に外部サービスへの依存がないため、閉域環境やオフライン開発で使う。
+/// 注意: ortクレートのデフォルトfeature（download-binaries）により、**ビルド時**には
+/// onnxruntimeバイナリのダウンロード（cdn.pyke.io）が発生する。ビルド環境まで閉域の
+/// 場合は`ORT_LIB_LOCATION`で事前配置したonnxruntimeを指すこと（README参照）。
 ///
 /// モデルへの要求:
 /// - 入力: `input_ids`と`attention_mask`（いずれもint64）。`token_type_ids`は
@@ -55,6 +70,13 @@ impl LocalOnnxProvider {
     /// モデルとトークナイザをファイルから読み込み、プローブ推論で出力次元を検証する。
     /// 数百ms〜数秒かかるブロッキング処理なので、起動時に一度だけ呼ぶこと。
     pub fn load(config: LocalOnnxConfig) -> Result<Self, YorishiroError> {
+        if config.max_sequence_length < MIN_SEQUENCE_LENGTH {
+            return Err(internal(format!(
+                "max_sequence_length must be >= {MIN_SEQUENCE_LENGTH}, got {}",
+                config.max_sequence_length
+            )));
+        }
+
         let mut tokenizer = Tokenizer::from_file(&config.tokenizer_path).map_err(|err| {
             internal(format!(
                 "failed to load tokenizer '{}': {err}",
@@ -155,10 +177,10 @@ impl Inner {
             inputs.push(("token_type_ids".into(), to_tensor(token_type_ids)?.into()));
         }
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|_| internal("onnx session lock poisoned"))?;
+        // poisoningからは復旧する: ロック保持中のpanicが起きても、Sessionは推論間で
+        // 状態を持たない（&mutはortのAPI都合）ため不変条件は壊れておらず、poisonを
+        // 理由にプロセス再起動までembedding機能全体を恒久停止させる方が実害が大きい。
+        let mut session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
         let outputs = session
             .run(inputs)
             .map_err(|err| internal(format!("onnx inference failed: {err}")))?;
@@ -239,12 +261,21 @@ impl EmbeddingProvider for LocalOnnxProvider {
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, YorishiroError> {
         // ONNX推論はCPUバウンドかつ数十ms〜数百msブロックするため、tokioの
-        // ワーカースレッドを塞がないようblockingプールへ逃がす。
+        // ワーカースレッドを塞がないようblockingプールへ逃がす。タイムアウト超過時、
+        // blocking側のタスク自体は完走する（キャンセル不能）が、呼び出し側は
+        // 待たずにエラーで戻り、保持しているリソースを解放できる。
         let texts: Vec<String> = texts.iter().map(|text| text.to_string()).collect();
         let inner = Arc::clone(&self.inner);
-        tokio::task::spawn_blocking(move || inner.embed_blocking(&texts))
-            .await
-            .map_err(|err| internal(format!("embedding task panicked: {err}")))?
+        let task = tokio::task::spawn_blocking(move || inner.embed_blocking(&texts));
+        match tokio::time::timeout(EMBED_TIMEOUT, task).await {
+            Ok(joined) => {
+                joined.map_err(|err| internal(format!("embedding task panicked: {err}")))?
+            }
+            Err(_) => Err(internal(format!(
+                "onnx embedding timed out after {}s (inference queue congested?)",
+                EMBED_TIMEOUT.as_secs()
+            ))),
+        }
     }
 }
 
@@ -268,6 +299,22 @@ mod tests {
         // 平均は(2.0, 2.0)、L2正規化で(1/√2, 1/√2)。
         assert!((pooled[0] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
         assert!((pooled[1] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn load_rejects_too_small_max_sequence_length() {
+        // tokenizersのtruncation処理は特殊トークン数をmax_lengthから減算するため、
+        // 極端に小さい値はunderflowを引き起こす。ロード時に弾かれることを確認する。
+        let result = LocalOnnxProvider::load(LocalOnnxConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            tokenizer_path: "/nonexistent/tokenizer.json".into(),
+            dimensions: 768,
+            max_sequence_length: 1,
+        });
+        let Err(err) = result else {
+            panic!("load should fail for too small max_sequence_length");
+        };
+        assert!(err.to_string().contains("max_sequence_length"));
     }
 
     #[test]
