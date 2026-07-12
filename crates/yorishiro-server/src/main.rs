@@ -167,6 +167,21 @@ mod tests {
         }
     }
 
+    /// embedding配線のend-to-endテスト用に、決定的なベクトルを返すプロバイダ。
+    /// 全テキストが同一ベクトルになるため、クエリとentityの距離は常に0＝必ずヒットする。
+    struct FixedEmbeddingProvider;
+
+    #[async_trait]
+    impl EmbeddingProvider for FixedEmbeddingProvider {
+        fn dimensions(&self) -> usize {
+            768
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, YorishiroError> {
+            Ok(texts.iter().map(|_| vec![0.1_f32; 768]).collect())
+        }
+    }
+
     async fn seed_tenant(pool: &PgPool) -> Uuid {
         let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
             .bind("test-tenant")
@@ -761,6 +776,90 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// entity作成→バックグラウンドembedding同期→ベクトル検索ヒット、という
+    /// FR-4の本番経路全体をREST経由で検証する。embedding同期はfire-and-forgetの
+    /// バックグラウンドタスクなので、検索がヒットするまで短い間隔でポーリングする。
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rest_created_entity_becomes_searchable(pool: PgPool) {
+        let tenant_id = seed_tenant(&pool).await;
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+            .await
+            .unwrap();
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = build_app(AppState {
+            tenant_db: db,
+            embedding_provider: Arc::new(FixedEmbeddingProvider),
+        });
+        let schema_auth = format!("Bearer {}", schema_key.plaintext);
+        let write_auth = format!("Bearer {}", write_key.plaintext);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(serde_json::json!({
+                "name": "task-management",
+                "entity_types": {
+                    "task": {
+                        "fields": {
+                            "title": { "type": "string", "required": true, "x-embed": true }
+                        }
+                    }
+                },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/entities",
+            Some(&write_auth),
+            Some(serde_json::json!({
+                "schema_name": "task-management",
+                "entity_type": "task",
+                "data": { "title": "write quarterly report" },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = rest_json_body(response).await;
+        let entity_id = created["id"].as_str().unwrap().to_string();
+
+        let mut hits = serde_json::Value::Null;
+        for _ in 0..50 {
+            let response = rest_request(
+                &app,
+                "GET",
+                "/api/search?query_text=quarterly%20report",
+                Some(&write_auth),
+                None,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = rest_json_body(response).await;
+            if !body.as_array().unwrap().is_empty() {
+                hits = body;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        let hits = hits
+            .as_array()
+            .expect("entity did not become searchable within 5s (embedding sync not wired?)");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["entity"]["id"], entity_id.as_str());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -72,7 +72,10 @@ impl YorishiroMcpServer {
 
         let tenant_id = authorized.ctx.tenant_id;
         match entities::create(authorized.conn(), tenant_id, input).await {
-            Ok(record) => ok_json(record),
+            Ok(record) => {
+                self.state.spawn_embedding_sync(tenant_id, record.clone());
+                ok_json(record)
+            }
             Err(err) => Ok(err_to_tool_result(err)),
         }
     }
@@ -108,7 +111,10 @@ impl YorishiroMcpServer {
 
         let tenant_id = authorized.ctx.tenant_id;
         match entities::update(authorized.conn(), tenant_id, args.id, args.data).await {
-            Ok(record) => ok_json(record),
+            Ok(record) => {
+                self.state.spawn_embedding_sync(tenant_id, record.clone());
+                ok_json(record)
+            }
             Err(err) => Ok(err_to_tool_result(err)),
         }
     }

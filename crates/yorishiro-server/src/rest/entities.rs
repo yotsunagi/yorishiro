@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
@@ -10,6 +10,7 @@ use yorishiro_core::entities::{self, EntityRecord};
 
 use crate::auth::{Authorized, ReadScope, WriteScope};
 use crate::error::ApiError;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateEntityRequest {
@@ -46,6 +47,7 @@ pub struct ListEntitiesParams {
     tag = "entities",
 )]
 pub async fn create_entity(
+    State(state): State<AppState>,
     mut authorized: Authorized<WriteScope>,
     Json(body): Json<CreateEntityRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -56,6 +58,7 @@ pub async fn create_entity(
         data: body.data,
     };
     let record = entities::create(authorized.conn(), tenant_id, input).await?;
+    state.spawn_embedding_sync(tenant_id, record.clone());
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -95,12 +98,14 @@ pub async fn get_entity(
     tag = "entities",
 )]
 pub async fn update_entity(
+    State(state): State<AppState>,
     mut authorized: Authorized<WriteScope>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateEntityRequest>,
 ) -> Result<Json<EntityRecord>, ApiError> {
     let tenant_id = authorized.ctx.tenant_id;
     let record = entities::update(authorized.conn(), tenant_id, id, body.data).await?;
+    state.spawn_embedding_sync(tenant_id, record.clone());
     Ok(Json(record))
 }
 

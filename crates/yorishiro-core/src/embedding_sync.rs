@@ -3,8 +3,10 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::embedding::EmbeddingProvider;
+use crate::entities::EntityRecord;
 use crate::error::YorishiroError;
 use crate::metaschema::EntityTypeDef;
+use crate::schemas;
 
 /// `x-embed`が付いたフィールドの値を`"field: value"`の形式で連結し、埋め込み対象テキストを
 /// 合成する。フィールド名を残すのは、値だけを裸で並べるより埋め込みモデルにとって
@@ -69,6 +71,42 @@ pub async fn sync_embedding(
     }
 
     Ok(())
+}
+
+/// `entities::create`/`update`の戻り値（`EntityRecord`）だけを頼りに、embedding同期に
+/// 必要なスキーマ定義を自前で解決して`sync_embedding`を呼ぶ。record内のdataは
+/// そのentityが検証されたスキーマバージョン（`record.schema_id`）に属するため、
+/// activeバージョンではなくIDでの取得が正しい。
+///
+/// アダプタ層がレスポンス返却後のバックグラウンドタスクから呼ぶことを想定した入口で、
+/// `sync_embedding`と同じくcreate/updateとは別コネクション・別トランザクションで呼ぶこと。
+pub async fn sync_embedding_for_record(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    record: &EntityRecord,
+    provider: &dyn EmbeddingProvider,
+) -> Result<(), YorishiroError> {
+    let schema = schemas::get_by_id(conn, tenant_id, record.schema_id).await?;
+    let entity_type_def = schema
+        .definition
+        .entity_types
+        .get(&record.entity_type)
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!(
+                "entity_type '{}' is not defined in schema '{}'",
+                record.entity_type, schema.definition.name
+            ),
+        })?;
+
+    sync_embedding(
+        conn,
+        tenant_id,
+        record.id,
+        entity_type_def,
+        &record.data,
+        provider,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -203,6 +241,45 @@ mod tests {
         )
         .await
         .unwrap();
+
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+
+        let row = sqlx::query(
+            "SELECT embedding IS NOT NULL AS has_embedding FROM entities WHERE id = $1",
+        )
+        .bind(entity.id)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        let has_embedding: bool = row.get("has_embedding");
+        assert!(has_embedding);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sync_for_record_resolves_schema_and_writes_embedding(pool: PgPool) {
+        let tenant_id = seed_tenant(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+            .await
+            .unwrap();
+
+        let entity = entities::create(
+            &mut conn,
+            tenant_id,
+            CreateEntityInput {
+                schema_name: "task-management".into(),
+                entity_type: "task".into(),
+                data: json!({ "title": "write report" }),
+            },
+        )
+        .await
+        .unwrap();
+
+        let provider = FakeProvider::new(768);
+        sync_embedding_for_record(&mut conn, tenant_id, &entity, &provider)
+            .await
+            .unwrap();
 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
