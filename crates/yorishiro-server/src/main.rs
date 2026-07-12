@@ -45,10 +45,7 @@ async fn main() -> Result<()> {
 
     let tenant_db = TenantDb::connect(&database_url, 20).await?;
     let embedding_provider = build_embedding_provider()?;
-    let state = AppState {
-        tenant_db,
-        embedding_provider,
-    };
+    let state = AppState::new(tenant_db, embedding_provider);
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
@@ -161,10 +158,7 @@ mod tests {
     }
 
     fn test_state(pool: PgPool) -> AppState {
-        AppState {
-            tenant_db: TenantDb::new(pool),
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        }
+        AppState::new(TenantDb::new(pool), Arc::new(UnreachableEmbeddingProvider))
     }
 
     /// embedding配線のend-to-endテスト用に、決定的なベクトルを返すプロバイダ。
@@ -236,10 +230,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
         let response = app
             .oneshot(
                 Request::builder()
@@ -486,10 +477,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -531,10 +519,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -656,10 +641,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
 
         let response = rest_request(
             &app,
@@ -689,10 +671,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -794,10 +773,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(FixedEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(FixedEmbeddingProvider)));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -883,10 +859,7 @@ mod tests {
             .unwrap();
         drop(conn_b);
 
-        let app = build_app(AppState {
-            tenant_db: db,
-            embedding_provider: Arc::new(UnreachableEmbeddingProvider),
-        });
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
         let schema_auth_a = format!("Bearer {}", schema_key_a.plaintext);
         let write_auth_a = format!("Bearer {}", write_key_a.plaintext);
         let read_auth_b = format!("Bearer {}", read_key_b.plaintext);

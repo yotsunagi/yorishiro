@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -45,6 +46,7 @@ pub async fn sync_embedding(
     conn: &mut PgConnection,
     tenant_id: Uuid,
     entity_id: Uuid,
+    snapshot_updated_at: DateTime<Utc>,
     entity_type_def: &EntityTypeDef,
     data: &Value,
     provider: &dyn EmbeddingProvider,
@@ -55,18 +57,26 @@ pub async fn sync_embedding(
 
     let vector = provider.embed(&text).await?;
 
-    let result = sqlx::query("UPDATE entities SET embedding = $1 WHERE tenant_id = $2 AND id = $3")
-        .bind(pgvector::Vector::from(vector))
-        .bind(tenant_id)
-        .bind(entity_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    // `updated_at`の一致を書き込み条件に含めることで、同一entityへのupdateが連続した際に
+    // embedding API呼び出しの所要時間差で完了順が入れ替わっても、古いdataから計算した
+    // ベクトルが新しいものを上書きしないようにする（embedding書き込み自体はupdated_atを
+    // 変更しないため、この条件が後続の正当な同期を妨げることはない）。
+    let result = sqlx::query(
+        "UPDATE entities SET embedding = $1 \
+         WHERE tenant_id = $2 AND id = $3 AND updated_at = $4",
+    )
+    .bind(pgvector::Vector::from(vector))
+    .bind(tenant_id)
+    .bind(entity_id)
+    .bind(snapshot_updated_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     if result.rows_affected() == 0 {
         tracing::debug!(
             %entity_id,
-            "sync_embedding: entity no longer exists, embedding write skipped"
+            "sync_embedding: entity was deleted or updated since this snapshot, write skipped"
         );
     }
 
@@ -102,6 +112,7 @@ pub async fn sync_embedding_for_record(
         conn,
         tenant_id,
         record.id,
+        record.updated_at,
         entity_type_def,
         &record.data,
         provider,
@@ -235,6 +246,7 @@ mod tests {
             &mut conn,
             tenant_id,
             entity.id,
+            entity.updated_at,
             entity_type_def,
             &entity.data,
             &provider,
@@ -325,6 +337,7 @@ mod tests {
             &mut conn,
             tenant_id,
             entity.id,
+            entity.updated_at,
             entity_type_def,
             &entity.data,
             &provider,
@@ -424,6 +437,7 @@ mod tests {
             &mut conn,
             tenant_id,
             entity.id,
+            entity.updated_at,
             entity_type_def,
             &entity.data,
             &FailingProvider,
@@ -469,6 +483,7 @@ mod tests {
             &mut conn,
             tenant_id,
             entity.id,
+            entity.updated_at,
             entity_type_def,
             &entity.data,
             &provider,

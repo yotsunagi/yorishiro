@@ -204,6 +204,7 @@ mod tests {
             conn,
             tenant_id,
             entity.id,
+            entity.updated_at,
             entity_type_def,
             &entity.data,
             &provider,
