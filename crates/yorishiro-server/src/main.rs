@@ -13,6 +13,7 @@ use yorishiro_core::db::TenantDb;
 use yorishiro_core::embedding::{
     EmbeddingProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
 };
+use yorishiro_core::embedding_onnx::{LocalOnnxConfig, LocalOnnxProvider};
 
 mod auth;
 mod error;
@@ -55,8 +56,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// 環境変数からOpenAI互換embeddingsプロバイダを構築する。`entities.embedding`列は
-/// `vector(768)`固定のため、次元数が一致しない設定は起動時に弾く。
+/// 環境変数からembeddingsプロバイダを構築する。`YSR_EMBEDDING_PROVIDER`で
+/// `openai`（OpenAI互換API、デフォルト）と`local`（ローカルONNXモデル）を切り替える。
+/// `entities.embedding`列は`vector(768)`固定のため、次元数が一致しない設定は
+/// 起動時に弾く（localの場合はさらにプローブ推論でモデルの実出力次元も検証される）。
 fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
     let dimensions: usize = std::env::var("YSR_EMBEDDING_DIMENSIONS")
         .unwrap_or_else(|_| "768".into())
@@ -67,18 +70,42 @@ fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
         );
     }
 
-    let provider = OpenAiCompatibleProvider::new(OpenAiCompatibleConfig {
-        base_url: std::env::var("YSR_EMBEDDING_BASE_URL")
-            .expect("YSR_EMBEDDING_BASE_URL must be set"),
-        api_key: std::env::var("YSR_EMBEDDING_API_KEY").unwrap_or_default(),
-        model: std::env::var("YSR_EMBEDDING_MODEL").expect("YSR_EMBEDDING_MODEL must be set"),
-        dimensions,
-        send_dimensions_param: std::env::var("YSR_EMBEDDING_SEND_DIMENSIONS_PARAM")
-            .map(|v| v == "true")
-            .unwrap_or(true),
-    });
-
-    Ok(Arc::new(provider))
+    let kind = std::env::var("YSR_EMBEDDING_PROVIDER").unwrap_or_else(|_| "openai".into());
+    match kind.as_str() {
+        "openai" => {
+            let provider = OpenAiCompatibleProvider::new(OpenAiCompatibleConfig {
+                base_url: std::env::var("YSR_EMBEDDING_BASE_URL")
+                    .expect("YSR_EMBEDDING_BASE_URL must be set"),
+                api_key: std::env::var("YSR_EMBEDDING_API_KEY").unwrap_or_default(),
+                model: std::env::var("YSR_EMBEDDING_MODEL")
+                    .expect("YSR_EMBEDDING_MODEL must be set"),
+                dimensions,
+                send_dimensions_param: std::env::var("YSR_EMBEDDING_SEND_DIMENSIONS_PARAM")
+                    .map(|v| v == "true")
+                    .unwrap_or(true),
+            });
+            Ok(Arc::new(provider))
+        }
+        "local" => {
+            let max_sequence_length: usize = std::env::var("YSR_ONNX_MAX_SEQUENCE_LENGTH")
+                .unwrap_or_else(|_| "512".into())
+                .parse()?;
+            let provider = LocalOnnxProvider::load(LocalOnnxConfig {
+                model_path: std::env::var("YSR_ONNX_MODEL_PATH")
+                    .expect("YSR_ONNX_MODEL_PATH must be set when YSR_EMBEDDING_PROVIDER=local")
+                    .into(),
+                tokenizer_path: std::env::var("YSR_ONNX_TOKENIZER_PATH")
+                    .expect("YSR_ONNX_TOKENIZER_PATH must be set when YSR_EMBEDDING_PROVIDER=local")
+                    .into(),
+                dimensions,
+                max_sequence_length,
+            })?;
+            Ok(Arc::new(provider))
+        }
+        other => {
+            anyhow::bail!("unknown YSR_EMBEDDING_PROVIDER '{other}' (expected 'openai' or 'local')")
+        }
+    }
 }
 
 /// ルーティング構成そのものは`main`と統合テストの双方から同一の形で使う必要が

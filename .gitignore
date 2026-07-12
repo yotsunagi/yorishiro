@@ -5,3 +5,4 @@
 .env.local
 .cargo-cache
 .worktrees/
+/models
