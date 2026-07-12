@@ -1,0 +1,37 @@
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: yorishiro
+      POSTGRES_PASSWORD: yorishiro
+      POSTGRES_DB: yorishiro
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yorishiro"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
+      YSR_BIND: 0.0.0.0:8080
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sleep infinity
+
+volumes:
+  pgdata:

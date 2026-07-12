@@ -1,0 +1,36 @@
+[workspace]
+members = ["crates/yorishiro-core", "crates/yorishiro-server"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yotsunagi/yorishiro"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+http = "1"
+jsonschema = "0.47"
+pgvector = { version = "0.4.2", features = ["sqlx"] }
+rand = "0.10"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "2.2.0", features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "macros", "migrate"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+uuid = { version = "1", features = ["serde"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+wiremock = "0.6.5"

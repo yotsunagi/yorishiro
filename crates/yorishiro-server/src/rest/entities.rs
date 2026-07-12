@@ -1,0 +1,153 @@
+use axum::Json;
+use axum::extract::{Path, Query};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use serde::Deserialize;
+use serde_json::Value;
+use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
+use yorishiro_core::entities::{self, EntityRecord};
+
+use crate::auth::{Authorized, ReadScope, WriteScope};
+use crate::error::ApiError;
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateEntityRequest {
+    pub schema_name: String,
+    pub entity_type: String,
+    #[schema(value_type = Object)]
+    pub data: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateEntityRequest {
+    #[schema(value_type = Object)]
+    pub data: Value,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ListEntitiesParams {
+    pub entity_type: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/entities",
+    request_body = CreateEntityRequest,
+    responses(
+        (status = 201, description = "エンティティを作成した", body = EntityRecord),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 404, description = "指定されたスキーマ/entity_typeが存在しない", body = crate::error::ApiErrorBody),
+        (status = 422, description = "dataがスキーマに適合しない", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn create_entity(
+    mut authorized: Authorized<WriteScope>,
+    Json(body): Json<CreateEntityRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = authorized.ctx.tenant_id;
+    let input = entities::CreateEntityInput {
+        schema_name: body.schema_name,
+        entity_type: body.entity_type,
+        data: body.data,
+    };
+    let record = entities::create(authorized.conn(), tenant_id, input).await?;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/entities/{id}",
+    params(("id" = Uuid, Path, description = "エンティティID")),
+    responses(
+        (status = 200, description = "エンティティを取得した", body = EntityRecord),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn get_entity(
+    mut authorized: Authorized<ReadScope>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<EntityRecord>, ApiError> {
+    let tenant_id = authorized.ctx.tenant_id;
+    let record = entities::get(authorized.conn(), tenant_id, id).await?;
+    Ok(Json(record))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/entities/{id}",
+    params(("id" = Uuid, Path, description = "エンティティID")),
+    request_body = UpdateEntityRequest,
+    responses(
+        (status = 200, description = "エンティティを更新した", body = EntityRecord),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
+        (status = 422, description = "dataがスキーマに適合しない", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn update_entity(
+    mut authorized: Authorized<WriteScope>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateEntityRequest>,
+) -> Result<Json<EntityRecord>, ApiError> {
+    let tenant_id = authorized.ctx.tenant_id;
+    let record = entities::update(authorized.conn(), tenant_id, id, body.data).await?;
+    Ok(Json(record))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/entities/{id}",
+    params(("id" = Uuid, Path, description = "エンティティID")),
+    responses(
+        (status = 204, description = "エンティティを削除した"),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn delete_entity(
+    mut authorized: Authorized<WriteScope>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let tenant_id = authorized.ctx.tenant_id;
+    entities::delete(authorized.conn(), tenant_id, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/entities",
+    params(ListEntitiesParams),
+    responses(
+        (status = 200, description = "エンティティを一覧取得した", body = Vec<EntityRecord>),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn list_entities(
+    mut authorized: Authorized<ReadScope>,
+    Query(params): Query<ListEntitiesParams>,
+) -> Result<Json<Vec<EntityRecord>>, ApiError> {
+    let default = entities::ListEntitiesQuery::default();
+    let query = entities::ListEntitiesQuery {
+        entity_type: params.entity_type,
+        limit: params.limit.unwrap_or(default.limit),
+        offset: params.offset.unwrap_or(default.offset),
+    };
+
+    let tenant_id = authorized.ctx.tenant_id;
+    let records = entities::list(authorized.conn(), tenant_id, query).await?;
+    Ok(Json(records))
+}

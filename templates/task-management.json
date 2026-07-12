@@ -1,0 +1,27 @@
+{
+  "id": "task-management",
+  "name": "task-management",
+  "description": "個人のタスクとプロジェクトの管理",
+  "entity_types": {
+    "project": {
+      "description": "進行中のプロジェクト",
+      "fields": {
+        "title": { "type": "string", "required": true, "x-embed": true },
+        "status": { "type": "string", "enum": ["active", "done"], "required": true },
+        "due": { "type": "string", "format": "date" }
+      }
+    },
+    "task": {
+      "description": "単一の作業項目",
+      "fields": {
+        "title": { "type": "string", "required": true, "x-embed": true },
+        "note": { "type": "string", "x-embed": true, "x-ui": "textarea" },
+        "done": { "type": "boolean", "default": false }
+      }
+    }
+  },
+  "relation_types": {
+    "belongs_to": { "source": "task", "target": "project", "description": "タスクの所属先" },
+    "depends_on": { "source": "task", "target": "task", "description": "先行タスク" }
+  }
+}
