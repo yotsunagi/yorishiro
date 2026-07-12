@@ -4,3 +4,4 @@
 .env
 .env.local
 .cargo-cache
+.worktrees/
