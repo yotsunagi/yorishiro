@@ -15,6 +15,7 @@ use yorishiro_core::embedding::{
 };
 use yorishiro_core::embedding_onnx::{LocalOnnxConfig, LocalOnnxProvider};
 
+mod admin;
 mod auth;
 mod error;
 mod health;
@@ -27,6 +28,13 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 引数付き起動は管理CLI（`yorishiro-server admin ...`）。人間が読む出力なので
+    // JSON形式のtracing初期化より前に分岐する。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        return admin::run(&args).await;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .json()
