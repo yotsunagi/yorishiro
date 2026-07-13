@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use sea_query::{Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -8,6 +10,18 @@ use uuid::Uuid;
 use crate::entities;
 use crate::error::YorishiroError;
 use crate::schemas;
+
+#[derive(Iden)]
+enum Relations {
+    Table,
+    Id,
+    TenantId,
+    SourceId,
+    TargetId,
+    RelationType,
+    Properties,
+    CreatedAt,
+}
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct RelationRecord {
@@ -105,36 +119,54 @@ pub async fn create(
         input.properties
     };
 
-    sqlx::query_as::<_, RelationRecord>(
-        "INSERT INTO relations (tenant_id, source_id, target_id, relation_type, properties) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, tenant_id, source_id, target_id, relation_type, properties, created_at",
-    )
-    .bind(tenant_id)
-    .bind(input.source_id)
-    .bind(input.target_id)
-    .bind(&input.relation_type)
-    .bind(&properties)
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|err| match err.as_database_error() {
-        Some(db_err) if db_err.is_unique_violation() => YorishiroError::Conflict {
-            message: format!(
-                "relation '{}' between '{}' and '{}' already exists",
-                input.relation_type, input.source_id, input.target_id
-            ),
-        },
-        // There's a TOCTOU window between checking source/target existence and the INSERT,
-        // during which another transaction could delete the entity. An FK violation is that
-        // race surfacing, so it's treated as NotFound just like the upfront check.
-        Some(db_err) if db_err.is_foreign_key_violation() => YorishiroError::NotFound {
-            message: format!(
-                "source '{}' or target '{}' no longer exists",
-                input.source_id, input.target_id
-            ),
-        },
-        _ => YorishiroError::Internal(err.into()),
-    })
+    let (sql, values) = Query::insert()
+        .into_table(Relations::Table)
+        .columns([
+            Relations::TenantId,
+            Relations::SourceId,
+            Relations::TargetId,
+            Relations::RelationType,
+            Relations::Properties,
+        ])
+        .values_panic([
+            tenant_id.into(),
+            input.source_id.into(),
+            input.target_id.into(),
+            input.relation_type.clone().into(),
+            properties.into(),
+        ])
+        .returning(Query::returning().columns([
+            Relations::Id,
+            Relations::TenantId,
+            Relations::SourceId,
+            Relations::TargetId,
+            Relations::RelationType,
+            Relations::Properties,
+            Relations::CreatedAt,
+        ]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, RelationRecord, _>(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| match err.as_database_error() {
+            Some(db_err) if db_err.is_unique_violation() => YorishiroError::Conflict {
+                message: format!(
+                    "relation '{}' between '{}' and '{}' already exists",
+                    input.relation_type, input.source_id, input.target_id
+                ),
+            },
+            // There's a TOCTOU window between checking source/target existence and the INSERT,
+            // during which another transaction could delete the entity. An FK violation is that
+            // race surfacing, so it's treated as NotFound just like the upfront check.
+            Some(db_err) if db_err.is_foreign_key_violation() => YorishiroError::NotFound {
+                message: format!(
+                    "source '{}' or target '{}' no longer exists",
+                    input.source_id, input.target_id
+                ),
+            },
+            _ => YorishiroError::Internal(err.into()),
+        })
 }
 
 pub async fn get(
@@ -142,18 +174,28 @@ pub async fn get(
     tenant_id: Uuid,
     id: Uuid,
 ) -> Result<RelationRecord, YorishiroError> {
-    sqlx::query_as::<_, RelationRecord>(
-        "SELECT id, tenant_id, source_id, target_id, relation_type, properties, created_at \
-         FROM relations WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("relation '{id}' was not found"),
-    })
+    let (sql, values) = Query::select()
+        .columns([
+            Relations::Id,
+            Relations::TenantId,
+            Relations::SourceId,
+            Relations::TargetId,
+            Relations::RelationType,
+            Relations::Properties,
+            Relations::CreatedAt,
+        ])
+        .from(Relations::Table)
+        .and_where(Expr::col(Relations::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Relations::Id).eq(id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, RelationRecord, _>(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("relation '{id}' was not found"),
+        })
 }
 
 pub async fn delete(
@@ -161,9 +203,13 @@ pub async fn delete(
     tenant_id: Uuid,
     id: Uuid,
 ) -> Result<(), YorishiroError> {
-    let result = sqlx::query("DELETE FROM relations WHERE tenant_id = $1 AND id = $2")
-        .bind(tenant_id)
-        .bind(id)
+    let (sql, values) = Query::delete()
+        .from_table(Relations::Table)
+        .and_where(Expr::col(Relations::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Relations::Id).eq(id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let result = sqlx::query_with(&sql, values)
         .execute(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))?;
@@ -185,25 +231,38 @@ pub async fn list(
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
 
-    sqlx::query_as::<_, RelationRecord>(
-        "SELECT id, tenant_id, source_id, target_id, relation_type, properties, created_at \
-         FROM relations \
-         WHERE tenant_id = $1 \
-           AND ($2::uuid IS NULL OR source_id = $2) \
-           AND ($3::uuid IS NULL OR target_id = $3) \
-           AND ($4::text IS NULL OR relation_type = $4) \
-         ORDER BY created_at DESC \
-         LIMIT $5 OFFSET $6",
-    )
-    .bind(tenant_id)
-    .bind(query.source_id)
-    .bind(query.target_id)
-    .bind(query.relation_type)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let mut builder = Query::select();
+    builder
+        .columns([
+            Relations::Id,
+            Relations::TenantId,
+            Relations::SourceId,
+            Relations::TargetId,
+            Relations::RelationType,
+            Relations::Properties,
+            Relations::CreatedAt,
+        ])
+        .from(Relations::Table)
+        .and_where(Expr::col(Relations::TenantId).eq(tenant_id));
+    if let Some(source_id) = query.source_id {
+        builder.and_where(Expr::col(Relations::SourceId).eq(source_id));
+    }
+    if let Some(target_id) = query.target_id {
+        builder.and_where(Expr::col(Relations::TargetId).eq(target_id));
+    }
+    if let Some(relation_type) = query.relation_type {
+        builder.and_where(Expr::col(Relations::RelationType).eq(relation_type));
+    }
+    builder
+        .order_by(Relations::CreatedAt, Order::Desc)
+        .limit(limit as u64)
+        .offset(offset as u64);
+    let (sql, values) = builder.build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, RelationRecord, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 #[cfg(test)]

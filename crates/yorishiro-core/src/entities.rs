@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use sea_query::{Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgConnection;
@@ -8,6 +10,19 @@ use uuid::Uuid;
 use crate::error::{ValidationDetail, YorishiroError};
 use crate::metaschema;
 use crate::schemas;
+
+#[derive(Iden)]
+enum Entities {
+    Table,
+    Id,
+    TenantId,
+    SchemaId,
+    SchemaVersion,
+    EntityType,
+    Data,
+    CreatedAt,
+    UpdatedAt,
+}
 
 /// A row in the `entities` table. `embedding` is managed separately by the
 /// search/embedding pipeline, so this module's CRUD doesn't touch it.
@@ -123,19 +138,38 @@ pub async fn create(
     let entity_type_def = resolve_entity_type(&schema.definition, &input.entity_type)?;
     validate_data(entity_type_def, &input.data)?;
 
-    sqlx::query_as::<_, EntityRecord>(
-        "INSERT INTO entities (tenant_id, schema_id, schema_version, entity_type, data) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, tenant_id, schema_id, schema_version, entity_type, data, created_at, updated_at",
-    )
-    .bind(tenant_id)
-    .bind(schema.id)
-    .bind(schema.version)
-    .bind(&input.entity_type)
-    .bind(&input.data)
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::insert()
+        .into_table(Entities::Table)
+        .columns([
+            Entities::TenantId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+        ])
+        .values_panic([
+            tenant_id.into(),
+            schema.id.into(),
+            schema.version.into(),
+            input.entity_type.into(),
+            input.data.into(),
+        ])
+        .returning(Query::returning().columns([
+            Entities::Id,
+            Entities::TenantId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+        ]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, EntityRecord, _>(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 pub async fn get(
@@ -143,18 +177,29 @@ pub async fn get(
     tenant_id: Uuid,
     id: Uuid,
 ) -> Result<EntityRecord, YorishiroError> {
-    sqlx::query_as::<_, EntityRecord>(
-        "SELECT id, tenant_id, schema_id, schema_version, entity_type, data, created_at, updated_at \
-         FROM entities WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("entity '{id}' was not found"),
-    })
+    let (sql, values) = Query::select()
+        .columns([
+            Entities::Id,
+            Entities::TenantId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+        ])
+        .from(Entities::Table)
+        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Entities::Id).eq(id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, EntityRecord, _>(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("entity '{id}' was not found"),
+        })
 }
 
 /// Fully replaces an existing entity's `data`. Validation is done against the schema
@@ -172,20 +217,31 @@ pub async fn update(
     let entity_type_def = resolve_entity_type(&schema.definition, &existing.entity_type)?;
     validate_data(entity_type_def, &data)?;
 
-    sqlx::query_as::<_, EntityRecord>(
-        "UPDATE entities SET data = $1, updated_at = now() \
-         WHERE tenant_id = $2 AND id = $3 \
-         RETURNING id, tenant_id, schema_id, schema_version, entity_type, data, created_at, updated_at",
-    )
-    .bind(&data)
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("entity '{id}' was not found"),
-    })
+    let (sql, values) = Query::update()
+        .table(Entities::Table)
+        .value(Entities::Data, data)
+        .value(Entities::UpdatedAt, Expr::cust("now()"))
+        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Entities::Id).eq(id))
+        .returning(Query::returning().columns([
+            Entities::Id,
+            Entities::TenantId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+        ]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, EntityRecord, _>(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("entity '{id}' was not found"),
+        })
 }
 
 pub async fn delete(
@@ -193,9 +249,13 @@ pub async fn delete(
     tenant_id: Uuid,
     id: Uuid,
 ) -> Result<(), YorishiroError> {
-    let result = sqlx::query("DELETE FROM entities WHERE tenant_id = $1 AND id = $2")
-        .bind(tenant_id)
-        .bind(id)
+    let (sql, values) = Query::delete()
+        .from_table(Entities::Table)
+        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Entities::Id).eq(id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let result = sqlx::query_with(&sql, values)
         .execute(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))?;
@@ -217,20 +277,33 @@ pub async fn list(
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
 
-    sqlx::query_as::<_, EntityRecord>(
-        "SELECT id, tenant_id, schema_id, schema_version, entity_type, data, created_at, updated_at \
-         FROM entities \
-         WHERE tenant_id = $1 AND ($2::text IS NULL OR entity_type = $2) \
-         ORDER BY created_at DESC \
-         LIMIT $3 OFFSET $4",
-    )
-    .bind(tenant_id)
-    .bind(query.entity_type)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let mut builder = Query::select();
+    builder
+        .columns([
+            Entities::Id,
+            Entities::TenantId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+        ])
+        .from(Entities::Table)
+        .and_where(Expr::col(Entities::TenantId).eq(tenant_id));
+    if let Some(entity_type) = query.entity_type {
+        builder.and_where(Expr::col(Entities::EntityType).eq(entity_type));
+    }
+    builder
+        .order_by(Entities::CreatedAt, Order::Desc)
+        .limit(limit as u64)
+        .offset(offset as u64);
+    let (sql, values) = builder.build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, EntityRecord, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 #[cfg(test)]
