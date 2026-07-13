@@ -272,4 +272,4 @@ $ cargo test --workspace
 
 ## ライセンス
 
-MIT OR Apache-2.0
+[MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のいずれか（利用者の選択）。
