@@ -16,6 +16,27 @@ docker composeの`environment:`や`docker compose exec -e`、systemdの`Environm
 | `YSR_CORS_ORIGINS` | ブラウザからアクセスする場合の許可オリジン（カンマ区切り）。未設定時はクロスオリジン読み取り不可 |
 | `RUST_LOG` | ログレベル（例: `info`） |
 
+## ログ出力
+
+HTTPアクセスログ（method・path・status・latency）を含む全てのログ行はJSON形式で出力され、
+`YSR_LOG_TARGET`で出力先を選択できます。
+
+| 変数 | 内容 |
+|---|---|
+| `YSR_LOG_TARGET` | `stdout`（既定、コンテナランタイムのログドライバ向け）、`single`（単一ファイルへ追記、ローテーションなし）、`daily`（日次ローテーションするファイル）、`syslog` |
+
+### `YSR_LOG_TARGET=single`または`daily`の場合
+
+| 変数 | 内容 |
+|---|---|
+| `YSR_LOG_DIR` | ログファイルの出力先ディレクトリ（既定: `.`）。ファイル名は`yorishiro.log`固定で、`daily`の場合は日付が付与される（例: `yorishiro.log.2026-07-13`） |
+
+### `YSR_LOG_TARGET=syslog`の場合
+
+| 変数 | 内容 |
+|---|---|
+| `YSR_SYSLOG_SOCKET` | RFC 3164形式のメッセージを送信するUnixドメインソケット（既定: `/dev/log`）。Linux/Unix系OS限定 |
+
 ## 埋め込みプロバイダ
 
 | 変数 | 内容 |

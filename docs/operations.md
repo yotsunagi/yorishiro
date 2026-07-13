@@ -29,3 +29,15 @@ emitted to `tracing` logs (`RUST_LOG`); there is no integration with a metrics b
 you need continuous monitoring, set up alerting on your log aggregation platform (Loki,
 CloudWatch Logs, etc.) and additionally run `admin resync-embeddings` periodically to check
 for anything missed.
+
+## Access logging
+
+Every request produces one JSON log line (method, path, status, latency) alongside the rest
+of the application's `tracing` output, and `YSR_LOG_TARGET` controls where all of it goes —
+see [configuration.md](configuration.md#logging). `stdout` is the right choice for a
+container runtime that collects logs from the process's standard streams; `single`/`daily`
+suit running the binary directly on a host without a surrounding log collector; `syslog`
+hands lines off to whatever the host's syslog daemon is already configured to do with them
+(forward, rotate, aggregate). None of these targets rotate or prune on their own beyond what
+`daily`'s day-boundary split does — pair `single`/`daily` with `logrotate` or an equivalent if
+disk usage needs to be bounded.

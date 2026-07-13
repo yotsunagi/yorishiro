@@ -16,6 +16,27 @@ docker compose, `docker compose exec -e`, `Environment=` in systemd, or similar.
 | `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access. Cross-origin reads are disabled if unset |
 | `RUST_LOG` | Log level (e.g. `info`) |
 
+## Logging
+
+Every log line, including the HTTP access log (method, path, status, latency), is a JSON
+object. `YSR_LOG_TARGET` selects where those lines go:
+
+| Variable | Description |
+|---|---|
+| `YSR_LOG_TARGET` | `stdout` (default, for a container runtime's log driver), `single` (one file, never rotated), `daily` (one file per day), or `syslog` |
+
+### When `YSR_LOG_TARGET=single` or `daily`
+
+| Variable | Description |
+|---|---|
+| `YSR_LOG_DIR` | Directory the log file is written under (default: `.`). The file is named `yorishiro.log`, with the date appended for `daily` (e.g. `yorishiro.log.2026-07-13`) |
+
+### When `YSR_LOG_TARGET=syslog`
+
+| Variable | Description |
+|---|---|
+| `YSR_SYSLOG_SOCKET` | Unix domain socket to send RFC 3164-framed messages to (default: `/dev/log`). Linux/Unix only |
+
 ## Embedding provider
 
 | Variable | Description |

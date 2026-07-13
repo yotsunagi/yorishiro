@@ -5,8 +5,7 @@ use axum::{Router, routing::get};
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
-use tower_http::trace::TraceLayer;
-use tracing_subscriber::EnvFilter;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use yorishiro_core::db::TenantDb;
@@ -19,6 +18,7 @@ mod admin;
 mod auth;
 mod error;
 mod health;
+mod logging;
 mod mcp;
 mod rest;
 mod state;
@@ -35,10 +35,9 @@ async fn main() -> Result<()> {
         return admin::run(&args).await;
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .json()
-        .init();
+    // Held for the rest of `main` because dropping it would stop the background thread that
+    // the `single`/`daily` file targets flush through.
+    let _log_guard = logging::init()?;
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let bind_addr = std::env::var("YSR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
@@ -180,7 +179,14 @@ fn build_app(state: AppState) -> Router {
         .merge(rest::router())
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", rest::ApiDoc::openapi()))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            // The default span/response levels are DEBUG, which a production `RUST_LOG=info`
+            // silently drops — raised to INFO so the access log (method, path, status,
+            // latency) actually reaches whichever target `logging::init` selected.
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+                .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
 
