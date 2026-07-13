@@ -1,8 +1,8 @@
--- APIキー認証の入口では、まだtenant_idが確定していない（`app.current_tenant`を
--- 設定しようがない）ため、通常のRLS経路ではapi_keysをkey_hashで検索できない。
--- この関数はマイグレーション実行ロール（テーブル所有者）の権限でSECURITY DEFINER
--- 実行し、RLSをこの1関数・1用途だけに限定してバイパスする。key_hash自体は
--- 返さず、認証結果として必要な列（id/tenant_id/scope）のみを返す。
+-- At the API key authentication entry point, tenant_id isn't known yet (there's nothing to
+-- set `app.current_tenant` to), so the normal RLS path can't look up api_keys by key_hash.
+-- This function runs SECURITY DEFINER as the migration role (the table owner), scoping the
+-- RLS bypass to this one function and purpose. It never returns key_hash itself — only the
+-- columns needed for the authentication result (id/tenant_id/scope).
 CREATE FUNCTION authenticate_api_key(p_key_hash bytea)
 RETURNS TABLE (id uuid, tenant_id uuid, scope text)
 LANGUAGE sql

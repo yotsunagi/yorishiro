@@ -1,13 +1,13 @@
--- テーブル所有者とsuperuserは`FORCE ROW LEVEL SECURITY`があっても常にRLSをバイパスする。
--- そのためRLSを実効させるには、アプリのランタイム接続を所有者(yorishiro)とは別の
--- 非superuser・非owner・NOBYPASSRLSロールで実行する必要がある。yorishiro_appは
--- LOGIN権限を持たない（`SET ROLE`はsuperuserがメンバーシップなしで実行できるため、
--- ログイン自体はyorishiroロールのまま行い、接続確立後に`SET ROLE yorishiro_app`へ
--- 切り替える運用とする）。
--- ロールはクラスタ全体で共有される一方、`sqlx::test`は複数の一時DBへこの
--- マイグレーションを並行適用するため、「存在確認してから作成」ではレースに
--- 負けて重複作成エラーになりうる。CREATE ROLEを直接試み、他の並行実行に
--- 先を越された場合のunique_violationだけを握りつぶす。
+-- The table owner and superuser always bypass RLS even with `FORCE ROW LEVEL SECURITY`. So
+-- to make RLS actually apply, the app's runtime connection has to run as a non-superuser,
+-- non-owner, NOBYPASSRLS role distinct from the owner (yorishiro). yorishiro_app has no
+-- LOGIN privilege (`SET ROLE` can be used by a superuser without membership, so the
+-- operational model is: log in as yorishiro, then `SET ROLE yorishiro_app` after the
+-- connection is established).
+-- Roles are shared cluster-wide, while `sqlx::test` applies this migration concurrently
+-- across many ephemeral databases, so a check-then-create would lose the race and hit a
+-- duplicate-creation error. Instead this tries CREATE ROLE directly and swallows only the
+-- unique_violation from losing that race to a concurrent run.
 DO $$
 BEGIN
   CREATE ROLE yorishiro_app NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOLOGIN;

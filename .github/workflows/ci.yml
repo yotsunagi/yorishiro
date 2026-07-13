@@ -38,9 +38,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # ort-sysがビルド時にonnxruntimeバイナリを展開する先。デフォルトのキャッシュ
-          # 対象（~/.cargo, ./target）に含まれないため、これを保存しないとウォーム
-          # キャッシュの2回目以降のCIでリンク時にライブラリが見つからず失敗する。
+          # Where ort-sys extracts the onnxruntime binary at build time. Not covered by the
+          # default cache targets (~/.cargo, ./target), so without caching this the linker
+          # fails to find the library on the second and later warm-cache CI runs.
           cache-directories: ~/.cache/ort.pyke.io
 
       - name: Install sqlx-cli
