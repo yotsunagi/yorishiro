@@ -1,28 +1,48 @@
 use anyhow::{Context, Result, bail};
+use clap::{Subcommand, ValueEnum};
 use sqlx::PgPool;
 use uuid::Uuid;
 use yorishiro_core::auth::{self, ApiKeyScope, CreatedApiKey};
 
+/// Subcommands under `yorishiro-server admin`. API keys are stored only as SHA-256 hashes,
+/// so issuing one can't be done by hand in SQL — this CLI is the only bootstrap mechanism.
+#[derive(Subcommand)]
+pub enum AdminCommand {
+    /// Create a new tenant.
+    CreateTenant { name: String },
+    /// Issue a new API key for a tenant (see `admin list-tenants` for the tenant ID).
+    CreateApiKey { tenant_id: Uuid, scope: ScopeArg },
+    /// List API keys for a tenant.
+    ListApiKeys { tenant_id: Uuid },
+    /// Revoke (delete) an API key (see `admin list-api-keys <tenant-id>` for the key ID).
+    RevokeApiKey { key_id: Uuid },
+    /// Re-sync embeddings for entities whose embedding is still missing.
+    ResyncEmbeddings { tenant_id: Uuid },
+    /// List all tenants.
+    ListTenants,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ScopeArg {
+    Read,
+    Write,
+    Schema,
+}
+
+impl From<ScopeArg> for ApiKeyScope {
+    fn from(value: ScopeArg) -> Self {
+        match value {
+            ScopeArg::Read => ApiKeyScope::Read,
+            ScopeArg::Write => ApiKeyScope::Write,
+            ScopeArg::Schema => ApiKeyScope::Schema,
+        }
+    }
+}
+
 /// Entry point for the admin subcommands. Unlike a plain server start (no args), this
 /// operates on the database directly using the DATABASE_URL connection role (the admin
-/// role that can run migrations). API keys are stored only as SHA-256 hashes, so issuing
-/// one can't be done by hand in SQL — this CLI is the only bootstrap mechanism.
-pub async fn run(args: &[String]) -> Result<()> {
-    let usage = "usage:\n  \
-        yorishiro-server admin create-tenant <name>\n  \
-        yorishiro-server admin create-api-key <tenant-id> <read|write|schema>\n  \
-        yorishiro-server admin list-api-keys <tenant-id>\n  \
-        yorishiro-server admin revoke-api-key <key-id>\n  \
-        yorishiro-server admin resync-embeddings <tenant-id>\n  \
-        yorishiro-server admin list-tenants";
-
-    let [command, rest @ ..] = args else {
-        bail!("{usage}");
-    };
-    if command != "admin" {
-        bail!("unknown command '{command}'\n{usage}");
-    }
-
+/// role that can run migrations).
+pub async fn run(command: AdminCommand) -> Result<()> {
     let database_url =
         std::env::var("DATABASE_URL").context("DATABASE_URL must be set for admin commands")?;
     let pool = PgPool::connect(&database_url)
@@ -32,18 +52,15 @@ pub async fn run(args: &[String]) -> Result<()> {
     // fresh database that has never been started (a no-op if already applied).
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
-    match rest {
-        [sub, name] if sub == "create-tenant" => {
-            let tenant_id = create_tenant(&pool, name).await?;
+    match command {
+        AdminCommand::CreateTenant { name } => {
+            let tenant_id = create_tenant(&pool, &name).await?;
             println!("tenant created");
             println!("  id:   {tenant_id}");
             println!("  name: {name}");
         }
-        [sub, tenant_id, scope] if sub == "create-api-key" => {
-            let tenant_id: Uuid = tenant_id
-                .parse()
-                .context("tenant-id must be a UUID (see `admin list-tenants`)")?;
-            let scope = parse_scope(scope)?;
+        AdminCommand::CreateApiKey { tenant_id, scope } => {
+            let scope = ApiKeyScope::from(scope);
             let created = create_api_key(&pool, tenant_id, scope).await?;
             println!("api key created (the plaintext key is shown ONLY once — store it now)");
             println!("  key:       {}", created.plaintext);
@@ -51,10 +68,7 @@ pub async fn run(args: &[String]) -> Result<()> {
             println!("  tenant id: {}", created.tenant_id);
             println!("  scope:     {scope:?}");
         }
-        [sub, tenant_id] if sub == "list-api-keys" => {
-            let tenant_id: Uuid = tenant_id
-                .parse()
-                .context("tenant-id must be a UUID (see `admin list-tenants`)")?;
+        AdminCommand::ListApiKeys { tenant_id } => {
             let keys = list_api_keys(&pool, tenant_id).await?;
             if keys.is_empty() {
                 println!("no api keys for tenant {tenant_id}");
@@ -72,17 +86,11 @@ pub async fn run(args: &[String]) -> Result<()> {
                 );
             }
         }
-        [sub, key_id] if sub == "revoke-api-key" => {
-            let key_id: Uuid = key_id
-                .parse()
-                .context("key-id must be a UUID (see `admin list-api-keys <tenant-id>`)")?;
+        AdminCommand::RevokeApiKey { key_id } => {
             revoke_api_key(&pool, key_id).await?;
             println!("api key {key_id} revoked (takes effect on the next request)");
         }
-        [sub, tenant_id] if sub == "resync-embeddings" => {
-            let tenant_id: Uuid = tenant_id
-                .parse()
-                .context("tenant-id must be a UUID (see `admin list-tenants`)")?;
+        AdminCommand::ResyncEmbeddings { tenant_id } => {
             let provider = crate::build_embedding_provider()
                 .context("embedding provider must be configured (see .env.example)")?;
             let report = resync_embeddings(&pool, tenant_id, provider.as_ref()).await?;
@@ -92,7 +100,7 @@ pub async fn run(args: &[String]) -> Result<()> {
                 report.candidates, report.synced, report.failed,
             );
         }
-        [sub] if sub == "list-tenants" => {
+        AdminCommand::ListTenants => {
             let tenants = list_tenants(&pool).await?;
             if tenants.is_empty() {
                 println!("no tenants (create one with `admin create-tenant <name>`)");
@@ -101,19 +109,9 @@ pub async fn run(args: &[String]) -> Result<()> {
                 println!("{id}  {name}");
             }
         }
-        _ => bail!("{usage}"),
     }
 
     Ok(())
-}
-
-fn parse_scope(s: &str) -> Result<ApiKeyScope> {
-    match s {
-        "read" => Ok(ApiKeyScope::Read),
-        "write" => Ok(ApiKeyScope::Write),
-        "schema" => Ok(ApiKeyScope::Schema),
-        other => bail!("unknown scope '{other}' (expected read, write, or schema)"),
-    }
 }
 
 async fn create_tenant(pool: &PgPool, name: &str) -> Result<Uuid> {
@@ -353,13 +351,5 @@ mod tests {
                 .await
                 .unwrap();
         assert!(has_embedding);
-    }
-
-    #[test]
-    fn parses_scopes() {
-        assert!(matches!(parse_scope("read"), Ok(ApiKeyScope::Read)));
-        assert!(matches!(parse_scope("write"), Ok(ApiKeyScope::Write)));
-        assert!(matches!(parse_scope("schema"), Ok(ApiKeyScope::Schema)));
-        assert!(parse_scope("admin").is_err());
     }
 }

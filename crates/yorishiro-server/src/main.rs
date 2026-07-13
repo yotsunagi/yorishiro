@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{Router, routing::get};
+use clap::Parser;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
@@ -26,13 +27,31 @@ mod whoami;
 
 use state::AppState;
 
+/// A plain start (`yorishiro-server`, no subcommand) runs the HTTP server; `yorishiro-server
+/// admin ...` runs one-off administrative commands instead.
+#[derive(Parser)]
+#[command(name = "yorishiro-server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Tenant and API key management, embedding resync.
+    Admin {
+        #[command(subcommand)]
+        command: admin::AdminCommand,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // A start with args is the admin CLI (`yorishiro-server admin ...`), which prints for a
-    // human, so branch to it before initializing JSON-formatted tracing.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if !args.is_empty() {
-        return admin::run(&args).await;
+    // The admin CLI prints for a human, so branch to it before initializing JSON-formatted
+    // tracing.
+    let cli = Cli::parse();
+    if let Some(Command::Admin { command }) = cli.command {
+        return admin::run(command).await;
     }
 
     // Held for the rest of `main` because dropping it would stop the background thread that
