@@ -32,7 +32,8 @@ $ docker compose exec \
 
 | パス | 内容 |
 |---|---|
-| `http://localhost:8080/health` | ヘルスチェック |
+| `http://localhost:8080/up` | Liveness probe（プロセスが起動していれば依存関係を見ず常に200） |
+| `http://localhost:8080/health` | Readiness check（DB接続も確認し、障害時は503） |
 | `http://localhost:8080/docs` | Swagger UI（REST APIドキュメント） |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI仕様 |
 | `http://localhost:8080/mcp` | MCPエンドポイント（Streamable HTTP） |

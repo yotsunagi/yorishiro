@@ -33,7 +33,8 @@ Migrations are applied automatically on startup. Endpoints:
 
 | Path | Description |
 |---|---|
-| `http://localhost:8080/health` | Health check |
+| `http://localhost:8080/up` | Liveness probe (always 200 if the process is running; no dependency checks) |
+| `http://localhost:8080/health` | Readiness check (also probes DB connectivity; 503 on outage) |
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |

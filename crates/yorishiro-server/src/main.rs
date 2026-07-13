@@ -173,6 +173,7 @@ fn build_app(state: AppState) -> Router {
     );
 
     Router::new()
+        .route("/up", get(health::up_check))
         .route("/health", get(health::health_check))
         .route("/whoami", get(whoami::whoami))
         .nest_service("/mcp", mcp_service)

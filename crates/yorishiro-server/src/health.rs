@@ -18,6 +18,14 @@ pub struct HealthResponse {
     pub status: &'static str,
 }
 
+/// The `/up` handler: a liveness probe that only confirms the process is running and able
+/// to answer HTTP requests. Unlike `/health`, it never touches the database, so it stays
+/// fast and healthy even during a DB outage — an orchestrator should use this to decide
+/// whether to restart the process, and `/health` to decide whether to route traffic to it.
+pub async fn up_check() -> (StatusCode, Json<HealthResponse>) {
+    (StatusCode::OK, Json(HealthResponse { status: "ok" }))
+}
+
 /// The `/health` handler. Simply always returning `{"status":"ok"}` would keep telling the
 /// orchestrator the instance is healthy even during a DB outage or pool exhaustion, making
 /// it impossible to detect and evict a broken instance. So this actually probes the
@@ -84,21 +92,36 @@ mod tests {
         }
     }
 
-    async fn health_response(pool: PgPool) -> axum::response::Response {
+    async fn get_response(pool: PgPool, uri: &str) -> axum::response::Response {
         let state = AppState::new(
             TenantDb::new(pool),
             std::sync::Arc::new(UnreachableEmbeddingProvider),
         );
         let app = build_app(state);
 
-        app.oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap()
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn health_response(pool: PgPool) -> axum::response::Response {
+        get_response(pool, "/health").await
+    }
+
+    /// `/up` must stay healthy even when the database is unreachable, since it's a pure
+    /// liveness probe — that's the property distinguishing it from `/health`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn up_returns_ok_even_when_db_is_unreachable(pool: PgPool) {
+        pool.close().await;
+
+        let response = get_response(pool, "/up").await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
