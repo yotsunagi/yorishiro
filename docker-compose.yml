@@ -15,13 +15,14 @@ services:
       timeout: 3s
       retries: 5
 
+  # Runs the actual built binary (multi-stage Dockerfile at the repo root), the same image
+  # used for production. Use `make up` / `make admin ...` rather than calling this directly.
   app:
     build:
       context: .
-      dockerfile: .devcontainer/Dockerfile
+      dockerfile: Dockerfile
     volumes:
-      - .:/workspace:cached
-    working_dir: /workspace
+      - ./models:/app/models:ro
     environment:
       DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
       YSR_BIND: 0.0.0.0:8080
@@ -34,7 +35,29 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: sleep infinity
+
+  # Rust toolchain (cargo/clippy/rustfmt/sqlx-cli) for one-off development commands, run via
+  # `make test` / `make fmt` / `make clippy` / `make shell`. Not started by `docker compose up`.
+  dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - .:/workspace:cached
+      # `docker compose run --rm` throws away the container's filesystem after each command,
+      # so the registry cache and build output need their own volumes to survive between runs.
+      - dev-cargo-registry:/usr/local/cargo/registry
+      - dev-target:/workspace/target
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
+      RUST_LOG: info
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:
+  dev-cargo-registry:
+  dev-target:
