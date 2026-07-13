@@ -48,6 +48,33 @@ impl SchemaRow {
     }
 }
 
+/// スキーマ一覧の1行。`definition`本体を含まない軽量なサマリで、
+/// MCPクライアント（LLM）が「このテナントにどんなスキーマがあるか」を
+/// 発見するための入口として使う。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
+pub struct SchemaSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub version: i32,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// テナントの全スキーマ（全バージョン、archived含む）をname・version順で列挙する。
+pub async fn list(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+) -> Result<Vec<SchemaSummary>, YorishiroError> {
+    sqlx::query_as::<_, SchemaSummary>(
+        "SELECT id, name, version, status, created_at \
+         FROM schemas WHERE tenant_id = $1 ORDER BY name, version",
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
 /// 指定テナント・名前の現在有効なスキーマ（status='active'のうち最新version）を取得する。
 pub async fn get_active_schema(
     conn: &mut PgConnection,

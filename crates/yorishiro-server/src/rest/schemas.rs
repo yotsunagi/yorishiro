@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::metaschema::{self, MetaSchemaDefinition, VersioningDiff};
-use yorishiro_core::schemas::{self, SchemaRecord};
+use yorishiro_core::schemas::{self, SchemaRecord, SchemaSummary};
 
 use crate::auth::{Authorized, ReadScope, SchemaScope};
 use crate::error::ApiError;
@@ -15,6 +15,24 @@ use crate::error::ApiError;
 pub struct CreateSchemaResponse {
     pub schema: SchemaRecord,
     pub diff: VersioningDiff,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/schemas",
+    responses(
+        (status = 200, description = "テナントの全スキーマ（全バージョン、archived含む）のサマリ一覧", body = Vec<SchemaSummary>),
+        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
+        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+    ),
+    tag = "schemas",
+)]
+pub async fn list_schemas(
+    mut authorized: Authorized<ReadScope>,
+) -> Result<Json<Vec<SchemaSummary>>, ApiError> {
+    let tenant_id = authorized.ctx.tenant_id;
+    let summaries = schemas::list(authorized.conn(), tenant_id).await?;
+    Ok(Json(summaries))
 }
 
 #[utoipa::path(

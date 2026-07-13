@@ -42,6 +42,7 @@ impl Modify for SecurityAddon {
         relations::get_relation,
         relations::delete_relation,
         relations::list_relations,
+        schemas::list_schemas,
         schemas::get_active_schema,
         schemas::get_schema_by_id,
         schemas::create_schema,
@@ -91,7 +92,10 @@ pub fn router() -> Router<AppState> {
             "/api/relations/{id}",
             get(relations::get_relation).delete(relations::delete_relation),
         )
-        .route("/api/schemas", post(schemas::create_schema))
+        .route(
+            "/api/schemas",
+            post(schemas::create_schema).get(schemas::list_schemas),
+        )
         .route(
             "/api/schemas/active/{name}",
             get(schemas::get_active_schema),

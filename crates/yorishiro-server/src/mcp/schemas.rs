@@ -44,6 +44,25 @@ pub struct GetEntityTypeJsonSchemaArgs {
 
 #[tool_router(vis = "pub(crate)", router = tool_router_schemas)]
 impl YorishiroMcpServer {
+    #[tool(
+        description = "テナントに登録済みの全スキーマ（全バージョン、archived含む）のサマリを一覧する。どんなスキーマがあるかの発見に使う（read scope必須）"
+    )]
+    pub async fn list_schemas(
+        &self,
+        Extension(parts): Extension<Parts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
+            AuthzOutcome::Authorized(a) => a,
+            AuthzOutcome::ScopeDenied(result) => return Ok(result),
+        };
+
+        let tenant_id = authorized.ctx.tenant_id;
+        match schemas::list(authorized.conn(), tenant_id).await {
+            Ok(summaries) => ok_json(summaries),
+            Err(err) => Ok(err_to_tool_result(err)),
+        }
+    }
+
     #[tool(description = "名前を指定して現在アクティブなスキーマ定義を取得する（read scope必須）")]
     pub async fn get_active_schema(
         &self,

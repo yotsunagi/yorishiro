@@ -55,13 +55,54 @@ async fn main() -> Result<()> {
     let tenant_db = TenantDb::connect(&database_url, 20).await?;
     let embedding_provider = build_embedding_provider()?;
     let state = AppState::new(tenant_db, embedding_provider);
+    let embedding_tasks = state.embedding_tasks().clone();
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {bind_addr}");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    // HTTPを閉じた後、書き込み済みentityのembedding同期が完走するのを待つ。
+    // ここで待たずに即終了すると、直前に作成されたentityが検索から漏れ続ける
+    // （`admin resync-embeddings`での回復は可能だが、日常のデプロイで
+    // 発生させないのが第一）。
+    embedding_tasks.close();
+    if tokio::time::timeout(std::time::Duration::from_secs(30), embedding_tasks.wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "embedding syncs did not finish within 30s; exiting anyway \
+             (recover with `admin resync-embeddings`)"
+        );
+    }
 
     Ok(())
+}
+
+/// SIGTERM（コンテナオーケストレータの標準的な停止シグナル）とCtrl-Cの両方で
+/// graceful shutdownを開始する。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl-c handler");
+    };
+
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received, draining connections");
 }
 
 /// 環境変数からembeddingsプロバイダを構築する。`YSR_EMBEDDING_PROVIDER`で
@@ -426,6 +467,7 @@ mod tests {
             "get_relation" => serde_json::json!({ "id": NIL_UUID }),
             "delete_relation" => serde_json::json!({ "id": NIL_UUID }),
             "list_relations" => serde_json::json!({}),
+            "list_schemas" => serde_json::json!({}),
             "get_active_schema" => serde_json::json!({ "name": "dummy" }),
             "get_schema_by_id" => serde_json::json!({ "schema_id": NIL_UUID }),
             "create_schema" => serde_json::json!({ "definition": {} }),
@@ -471,8 +513,8 @@ mod tests {
             .collect();
         assert_eq!(
             tool_names.len(),
-            14,
-            "expected 14 registered tools, got {tool_names:?}"
+            15,
+            "expected 15 registered tools, got {tool_names:?}"
         );
 
         for (index, name) in tool_names.iter().enumerate() {
@@ -1244,5 +1286,16 @@ mod tests {
         .await;
         let active = rest_json_body(response).await;
         assert_eq!(active["version"], 2);
+
+        // 一覧にはarchivedになったv1とactiveなv2の両方が載る。
+        let response = rest_request(&app, "GET", "/api/schemas", Some(&write_auth), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let listed = rest_json_body(response).await;
+        let listed = listed.as_array().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0]["version"], 1);
+        assert_eq!(listed[0]["status"], "archived");
+        assert_eq!(listed[1]["version"], 2);
+        assert_eq!(listed[1]["status"], "active");
     }
 }

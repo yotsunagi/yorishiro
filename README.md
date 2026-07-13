@@ -96,6 +96,14 @@ $ docker compose exec app cargo run -q -p yorishiro-server -- admin list-tenants
 平文キーは発行時に一度だけ表示されます。管理コマンドは`DATABASE_URL`の接続ロール
 （マイグレーションと同じ管理ロール）で直接DBへアクセスします。
 
+その他の管理コマンド:
+
+| コマンド | 内容 |
+|---|---|
+| `admin list-api-keys <tenant-id>` | キーの一覧（ID・scope・prefix・最終使用日時） |
+| `admin revoke-api-key <key-id>` | キーの即時失効（漏洩時など） |
+| `admin resync-embeddings <tenant-id>` | embedding未生成のentityを再同期（同期失敗からの回復） |
+
 ### 認証とscope
 
 すべてのAPIは`Authorization: Bearer <APIキー>`で認証します。キーは`ysr_`で始まる文字列で、
@@ -154,7 +162,7 @@ $ curl "localhost:8080/api/search?query_text=買い物" -H "Authorization: Beare
 
 ## MCPツール
 
-`/mcp`（Streamable HTTP）に接続すると14のツールが使えます。Claude Codeでの接続例:
+`/mcp`（Streamable HTTP）に接続すると15のツールが使えます。Claude Codeでの接続例:
 
 ```console
 $ claude mcp add --transport http yorishiro http://localhost:8080/mcp \
@@ -164,6 +172,7 @@ $ claude mcp add --transport http yorishiro http://localhost:8080/mcp \
 | ツール | scope | 内容 |
 |---|---|---|
 | `create_schema` | schema | メタスキーマの登録（新バージョン追加） |
+| `list_schemas` | read | 登録済みスキーマのサマリ一覧（発見用） |
 | `get_active_schema` | read | アクティブなスキーマ定義の取得 |
 | `get_schema_by_id` | read | 特定バージョンのスキーマ取得 |
 | `get_entity_type_json_schema` | read | entity_typeのJSON Schema投影 |
@@ -208,6 +217,46 @@ YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json
 注意: 「外部サービス不要」は実行時の話で、**ビルド時**にはortクレートがonnxruntimeの
 プリビルドバイナリをダウンロードします（cdn.pyke.io）。ビルド環境まで閉域の場合は、
 事前に配置したonnxruntimeを`ORT_LIB_LOCATION`環境変数で指定してビルドしてください。
+
+## 環境変数リファレンス
+
+全変数の一覧と説明は[`.env.example`](.env.example)を参照してください。変数は
+**プロセス環境変数として**サーバへ渡します（`.env`ファイルを自動で読む仕組みはありません。
+docker composeの`environment:`や`docker compose exec -e`、systemdの`Environment=`などで
+設定します）。
+
+主要なもの:
+
+| 変数 | 内容 |
+|---|---|
+| `DATABASE_URL` | PostgreSQL接続文字列（必須） |
+| `YSR_BIND` | リッスンアドレス（既定: `0.0.0.0:8080`） |
+| `YSR_EMBEDDING_PROVIDER` | `openai`（既定）または`local` |
+| `YSR_CORS_ORIGINS` | ブラウザからアクセスする場合の許可オリジン（カンマ区切り）。未設定時はクロスオリジン読み取り不可 |
+| `RUST_LOG` | ログレベル（例: `info`） |
+
+## 本番デプロイ
+
+リポジトリ直下の`Dockerfile`（マルチステージ）で自己完結の実行イメージをビルドできます:
+
+```console
+$ docker build -t yorishiro .
+$ docker run --rm -p 8080:8080 \
+    -e DATABASE_URL=postgres://... \
+    -e YSR_EMBEDDING_BASE_URL=... -e YSR_EMBEDDING_MODEL=... \
+    yorishiro
+```
+
+マイグレーションはバイナリに埋め込まれており起動時に自動適用されます（複数レプリカの
+同時起動もadvisory lockで安全）。SIGTERM/Ctrl-Cでgraceful shutdownし、処理中のリクエストと
+バックグラウンドのembedding同期の完了（最大30秒）を待ってから終了します。それでも
+embedding同期が失われた場合は`admin resync-embeddings`で回復できます。
+
+管理CLIは同じイメージで実行できます:
+
+```console
+$ docker run --rm -e DATABASE_URL=postgres://... yorishiro admin list-tenants
+```
 
 ## 開発
 

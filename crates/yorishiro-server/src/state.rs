@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::FromRef;
 use tokio::sync::Semaphore;
+use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::db::TenantDb;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub tenant_db: TenantDb,
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
     embedding_sync_permits: Arc<Semaphore>,
+    embedding_tasks: TaskTracker,
 }
 
 impl AppState {
@@ -31,7 +33,14 @@ impl AppState {
             tenant_db,
             embedding_provider,
             embedding_sync_permits: Arc::new(Semaphore::new(EMBEDDING_SYNC_MAX_CONCURRENCY)),
+            embedding_tasks: TaskTracker::new(),
         }
+    }
+
+    /// graceful shutdown時に未完了のembedding同期を待つためのトラッカー。
+    /// `main`がHTTPサーバ停止後に`close()`+`wait()`する。
+    pub fn embedding_tasks(&self) -> &TaskTracker {
+        &self.embedding_tasks
     }
 
     /// entityのcreate/update成功後にembedding列の同期をバックグラウンドで行う。
@@ -48,7 +57,10 @@ impl AppState {
         let db = self.tenant_db.clone();
         let provider = Arc::clone(&self.embedding_provider);
         let permits = Arc::clone(&self.embedding_sync_permits);
-        tokio::spawn(async move {
+        // TaskTracker経由でspawnすることで、graceful shutdown時に書き込み済みentityの
+        // embedding同期が完走するのを待てる（SIGTERM即終了だと同期が失われ、
+        // そのentityは検索から漏れ続ける）。
+        self.embedding_tasks.spawn(async move {
             // permitを取ってからコネクションを取得する順序が重要:
             // 逆にすると待機中のタスク全員が接続を抱え込み、制限の意味がなくなる。
             let Ok(_permit) = permits.acquire_owned().await else {

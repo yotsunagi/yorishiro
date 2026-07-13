@@ -11,6 +11,9 @@ pub async fn run(args: &[String]) -> Result<()> {
     let usage = "usage:\n  \
         yorishiro-server admin create-tenant <name>\n  \
         yorishiro-server admin create-api-key <tenant-id> <read|write|schema>\n  \
+        yorishiro-server admin list-api-keys <tenant-id>\n  \
+        yorishiro-server admin revoke-api-key <key-id>\n  \
+        yorishiro-server admin resync-embeddings <tenant-id>\n  \
         yorishiro-server admin list-tenants";
 
     let [command, rest @ ..] = args else {
@@ -47,6 +50,47 @@ pub async fn run(args: &[String]) -> Result<()> {
             println!("  key id:    {}", created.id);
             println!("  tenant id: {}", created.tenant_id);
             println!("  scope:     {scope:?}");
+        }
+        [sub, tenant_id] if sub == "list-api-keys" => {
+            let tenant_id: Uuid = tenant_id
+                .parse()
+                .context("tenant-id must be a UUID (see `admin list-tenants`)")?;
+            let keys = list_api_keys(&pool, tenant_id).await?;
+            if keys.is_empty() {
+                println!("no api keys for tenant {tenant_id}");
+            }
+            for key in keys {
+                println!(
+                    "{}  {:<8} prefix={}  created={}  last_used={}",
+                    key.id,
+                    key.scope,
+                    key.key_prefix,
+                    key.created_at.format("%Y-%m-%d %H:%M"),
+                    key.last_used_at
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "never".into()),
+                );
+            }
+        }
+        [sub, key_id] if sub == "revoke-api-key" => {
+            let key_id: Uuid = key_id
+                .parse()
+                .context("key-id must be a UUID (see `admin list-api-keys <tenant-id>`)")?;
+            revoke_api_key(&pool, key_id).await?;
+            println!("api key {key_id} revoked (takes effect on the next request)");
+        }
+        [sub, tenant_id] if sub == "resync-embeddings" => {
+            let tenant_id: Uuid = tenant_id
+                .parse()
+                .context("tenant-id must be a UUID (see `admin list-tenants`)")?;
+            let provider = crate::build_embedding_provider()
+                .context("embedding provider must be configured (see .env.example)")?;
+            let report = resync_embeddings(&pool, tenant_id, provider.as_ref()).await?;
+            println!(
+                "resync finished: {} entities had no embedding, {} synced, {} failed \
+                 (entities whose entity_type has no x-embed field stay without embedding)",
+                report.candidates, report.synced, report.failed,
+            );
         }
         [sub] if sub == "list-tenants" => {
             let tenants = list_tenants(&pool).await?;
@@ -110,6 +154,85 @@ async fn list_tenants(pool: &PgPool) -> Result<Vec<(Uuid, String)>> {
     Ok(rows)
 }
 
+#[derive(sqlx::FromRow)]
+struct ApiKeySummary {
+    id: Uuid,
+    scope: String,
+    key_prefix: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+async fn list_api_keys(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ApiKeySummary>> {
+    let rows = sqlx::query_as::<_, ApiKeySummary>(
+        "SELECT id, scope, key_prefix, created_at, last_used_at \
+         FROM api_keys WHERE tenant_id = $1 ORDER BY created_at",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// キー行を削除する。認証はリクエストごとにDBを引くため、削除は即座に失効を意味する。
+async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<()> {
+    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
+        .bind(key_id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        bail!("api key '{key_id}' does not exist (see `admin list-api-keys <tenant-id>`)");
+    }
+    Ok(())
+}
+
+struct ResyncReport {
+    candidates: usize,
+    synced: usize,
+    failed: usize,
+}
+
+/// embedding列がNULLのentityを列挙してembedding同期をやり直す。バックグラウンド同期の
+/// 失敗（embedding APIの一時障害、デプロイ時のプロセス停止など）で検索から漏れた
+/// entityを回復するための運用コマンド。
+async fn resync_embeddings(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    provider: &dyn yorishiro_core::embedding::EmbeddingProvider,
+) -> Result<ResyncReport> {
+    let ids: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM entities WHERE tenant_id = $1 AND embedding IS NULL")
+            .bind(tenant_id)
+            .fetch_all(pool)
+            .await?;
+
+    let mut report = ResyncReport {
+        candidates: ids.len(),
+        synced: 0,
+        failed: 0,
+    };
+    let mut conn = pool.acquire().await?;
+    for (entity_id,) in ids {
+        let result = async {
+            let record = yorishiro_core::entities::get(&mut conn, tenant_id, entity_id).await?;
+            yorishiro_core::embedding_sync::sync_embedding_for_record(
+                &mut conn, tenant_id, &record, provider,
+            )
+            .await
+        }
+        .await;
+
+        match result {
+            Ok(()) => report.synced += 1,
+            Err(err) => {
+                report.failed += 1;
+                eprintln!("  failed to resync entity {entity_id}: {err}");
+            }
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
@@ -143,6 +266,92 @@ mod tests {
             panic!("key creation should fail for an unknown tenant");
         };
         assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn revoked_key_no_longer_authenticates(pool: PgPool) {
+        let tenant_id = create_tenant(&pool, "revoke-test").await.unwrap();
+        let created = create_api_key(&pool, tenant_id, ApiKeyScope::Read)
+            .await
+            .unwrap();
+        auth::authenticate(&pool, &created.plaintext).await.unwrap();
+
+        let listed = list_api_keys(&pool, tenant_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+
+        revoke_api_key(&pool, created.id).await.unwrap();
+
+        let result = auth::authenticate(&pool, &created.plaintext).await;
+        assert!(matches!(
+            result,
+            Err(yorishiro_core::YorishiroError::Unauthenticated)
+        ));
+        assert!(list_api_keys(&pool, tenant_id).await.unwrap().is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resync_fills_missing_embeddings(pool: PgPool) {
+        use async_trait::async_trait;
+        use yorishiro_core::YorishiroError;
+        use yorishiro_core::embedding::EmbeddingProvider;
+
+        struct FixedProvider;
+
+        #[async_trait]
+        impl EmbeddingProvider for FixedProvider {
+            fn dimensions(&self) -> usize {
+                768
+            }
+
+            async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, YorishiroError> {
+                Ok(texts.iter().map(|_| vec![0.2_f32; 768]).collect())
+            }
+        }
+
+        let tenant_id = create_tenant(&pool, "resync-test").await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let definition = serde_json::from_value(serde_json::json!({
+            "name": "task-management",
+            "entity_types": {
+                "task": {
+                    "fields": { "title": { "type": "string", "required": true, "x-embed": true } }
+                }
+            }
+        }))
+        .unwrap();
+        yorishiro_core::schemas::create_schema(&mut conn, tenant_id, definition)
+            .await
+            .unwrap();
+        // coreのcreateはembeddingを書かない（アダプタのバックグラウンド同期の担当）ため、
+        // このentityは「同期に失敗して取り残されたentity」を再現している。
+        let entity = yorishiro_core::entities::create(
+            &mut conn,
+            tenant_id,
+            yorishiro_core::entities::CreateEntityInput {
+                schema_name: "task-management".into(),
+                entity_type: "task".into(),
+                data: serde_json::json!({ "title": "orphaned" }),
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let report = resync_embeddings(&pool, tenant_id, &FixedProvider)
+            .await
+            .unwrap();
+        assert_eq!(report.candidates, 1);
+        assert_eq!(report.synced, 1);
+        assert_eq!(report.failed, 0);
+
+        let (has_embedding,): (bool,) =
+            sqlx::query_as("SELECT embedding IS NOT NULL FROM entities WHERE id = $1")
+                .bind(entity.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(has_embedding);
     }
 
     #[test]
