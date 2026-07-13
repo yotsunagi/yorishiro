@@ -60,12 +60,16 @@ pub struct AuthContext {
     pub workspace_id: Uuid,
     pub tenant_id: Uuid,
     pub scope: ApiKeyScope,
+    /// The human user this key was issued for, if any. `None` for keys not attributed to a
+    /// specific person (e.g. pure service/automation keys).
+    pub user_id: Option<Uuid>,
 }
 
 pub struct CreatedApiKey {
     pub id: Uuid,
     pub workspace_id: Uuid,
     pub scope: ApiKeyScope,
+    pub user_id: Option<Uuid>,
     /// The raw API key string. Only its hash is stored in the DB, so this return value is
     /// the only place it can ever be obtained. Callers must make sure to surface it to the user.
     pub plaintext: String,
@@ -89,6 +93,7 @@ pub async fn create_api_key(
     conn: &mut PgConnection,
     workspace_id: Uuid,
     scope: ApiKeyScope,
+    user_id: Option<Uuid>,
 ) -> Result<CreatedApiKey, YorishiroError> {
     let prefix = format!("ysr_{}", random_hex(KEY_PREFIX_BYTES));
     let secret = random_hex(KEY_SECRET_BYTES);
@@ -96,13 +101,14 @@ pub async fn create_api_key(
     let key_hash = hash_key(&plaintext);
 
     let (id,): (Uuid,) = sqlx::query_as(
-        "INSERT INTO identity.api_keys (workspace_id, key_hash, key_prefix, scope) \
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO identity.api_keys (workspace_id, key_hash, key_prefix, scope, user_id) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(workspace_id)
     .bind(key_hash)
     .bind(&prefix)
     .bind(scope.as_db_str())
+    .bind(user_id)
     .fetch_one(&mut *conn)
     .await
     .map_err(|err| YorishiroError::Internal(err.into()))?;
@@ -111,6 +117,7 @@ pub async fn create_api_key(
         id,
         workspace_id,
         scope,
+        user_id,
         plaintext,
     })
 }
@@ -130,15 +137,15 @@ pub async fn authenticate(
 ) -> Result<AuthContext, YorishiroError> {
     let key_hash = hash_key(presented_key);
 
-    let row: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, workspace_id, tenant_id, scope FROM identity.authenticate_api_key($1)",
+    let row: Option<(Uuid, Uuid, Uuid, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, workspace_id, tenant_id, scope, user_id FROM identity.authenticate_api_key($1)",
     )
     .bind(key_hash)
     .fetch_optional(pool)
     .await
     .map_err(|err| YorishiroError::Internal(err.into()))?;
 
-    let (api_key_id, workspace_id, tenant_id, scope_str) =
+    let (api_key_id, workspace_id, tenant_id, scope_str, user_id) =
         row.ok_or(YorishiroError::Unauthenticated)?;
     let scope = ApiKeyScope::from_db_str(&scope_str).ok_or_else(|| {
         YorishiroError::Internal(anyhow::anyhow!(
@@ -151,6 +158,7 @@ pub async fn authenticate(
         workspace_id,
         tenant_id,
         scope,
+        user_id,
     })
 }
 
@@ -280,7 +288,7 @@ mod tests {
             .await
             .unwrap();
 
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
 
@@ -290,6 +298,32 @@ mod tests {
         assert_eq!(ctx.workspace_id, workspace_id);
         assert_eq!(ctx.api_key_id, created.id);
         assert_eq!(ctx.scope, ApiKeyScope::Write);
+        assert_eq!(ctx.user_id, None);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolves_the_attributed_user(pool: PgPool) {
+        let (tenant_id, workspace_id) = seed_workspace(&pool).await;
+        let (user_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.users (email, password_hash) VALUES ($1, $2) RETURNING id",
+        )
+        .bind("attributed@example.com")
+        .bind("hash")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db
+            .acquire_for_workspace(tenant_id, workspace_id)
+            .await
+            .unwrap();
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write, Some(user_id))
+            .await
+            .unwrap();
+
+        let ctx = authenticate(&pool, &created.plaintext).await.unwrap();
+        assert_eq!(ctx.user_id, Some(user_id));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -311,7 +345,7 @@ mod tests {
             .acquire_for_workspace(tenant_a, workspace_a)
             .await
             .unwrap();
-        let key_a = create_api_key(&mut conn_a, workspace_a, ApiKeyScope::Read)
+        let key_a = create_api_key(&mut conn_a, workspace_a, ApiKeyScope::Read, None)
             .await
             .unwrap();
 
@@ -319,7 +353,7 @@ mod tests {
             .acquire_for_workspace(tenant_b, workspace_b)
             .await
             .unwrap();
-        let key_b = create_api_key(&mut conn_b, workspace_b, ApiKeyScope::Read)
+        let key_b = create_api_key(&mut conn_b, workspace_b, ApiKeyScope::Read, None)
             .await
             .unwrap();
 
@@ -347,7 +381,7 @@ mod tests {
             .await
             .unwrap();
 
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         let ctx = authenticate(&pool, &created.plaintext).await.unwrap();
@@ -368,7 +402,7 @@ mod tests {
             .acquire_for_workspace(tenant_id, workspace_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
 
@@ -402,7 +436,7 @@ mod tests {
             .acquire_for_workspace(tenant_id, workspace_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -430,7 +464,7 @@ mod tests {
             .acquire_for_workspace(tenant_id, workspace_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         drop(conn);

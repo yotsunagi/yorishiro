@@ -56,9 +56,14 @@ CREATE TABLE identity.workspaces (
   UNIQUE (tenant_id, name)
 );
 
+-- `user_id` is nullable: a key can be attributed to the human who requested it (its scope is
+-- then capped by that user's tenant_memberships role, enforced by the admin CLI at issuance
+-- time), or left unattributed for purely machine/service use. Either way scope enforcement at
+-- request time is unaffected -- it's always driven by the `scope` column below.
 CREATE TABLE identity.api_keys (
   id           UUID PRIMARY KEY DEFAULT uuidv7(),
   workspace_id UUID NOT NULL REFERENCES identity.workspaces(id) ON DELETE CASCADE,
+  user_id      UUID REFERENCES identity.users(id) ON DELETE SET NULL,
   key_hash     BYTEA NOT NULL UNIQUE,
   key_prefix   TEXT  NOT NULL,
   scope        TEXT  NOT NULL CHECK (scope IN ('read', 'write', 'schema')),

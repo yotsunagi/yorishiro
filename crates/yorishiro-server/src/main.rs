@@ -342,7 +342,7 @@ mod tests {
             .acquire_for_workspace(tenant_id, workspace_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write)
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -369,6 +369,7 @@ mod tests {
         assert_eq!(json["tenant_id"], tenant_id.to_string());
         assert_eq!(json["workspace_id"], workspace_id.to_string());
         assert_eq!(json["scope"], "write");
+        assert!(json["user_id"].is_null());
     }
 
     /// Extracts the `data: {...}` line from a `text/event-stream` body and parses it as JSON.
@@ -597,7 +598,7 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         drop(conn);
@@ -642,7 +643,7 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         drop(conn);
@@ -767,7 +768,7 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
+        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         drop(conn);
@@ -797,10 +798,10 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -902,10 +903,10 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -985,10 +986,10 @@ mod tests {
             .acquire_for_workspace(tenant_a_tenant, tenant_a)
             .await
             .unwrap();
-        let schema_key_a = create_api_key(&mut conn_a, tenant_a, ApiKeyScope::Schema)
+        let schema_key_a = create_api_key(&mut conn_a, tenant_a, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key_a = create_api_key(&mut conn_a, tenant_a, ApiKeyScope::Write)
+        let write_key_a = create_api_key(&mut conn_a, tenant_a, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn_a);
@@ -997,7 +998,7 @@ mod tests {
             .acquire_for_workspace(tenant_b_tenant, tenant_b)
             .await
             .unwrap();
-        let read_key_b = create_api_key(&mut conn_b, tenant_b, ApiKeyScope::Read)
+        let read_key_b = create_api_key(&mut conn_b, tenant_b, ApiKeyScope::Read, None)
             .await
             .unwrap();
         drop(conn_b);
@@ -1126,10 +1127,10 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -1238,10 +1239,10 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);
@@ -1376,7 +1377,7 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
         drop(conn);
@@ -1422,10 +1423,10 @@ mod tests {
             .acquire_for_workspace(tenant_id_tenant, tenant_id)
             .await
             .unwrap();
-        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema, None)
             .await
             .unwrap();
-        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         drop(conn);

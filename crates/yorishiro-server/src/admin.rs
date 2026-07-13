@@ -47,7 +47,15 @@ pub enum AdminCommand {
     ListMembers { tenant_id: Uuid },
     /// Issue a new API key for a workspace (see `admin list-workspaces <tenant-id>` for the
     /// workspace ID).
-    CreateApiKey { workspace_id: Uuid, scope: ScopeArg },
+    CreateApiKey {
+        workspace_id: Uuid,
+        scope: ScopeArg,
+        /// Attribute the key to a specific user (see `admin list-members <tenant-id>`). The
+        /// requested scope is capped by that user's tenant role (owner/admin: schema,
+        /// member: write, viewer: read); omit for an unattributed service key.
+        #[arg(long)]
+        user: Option<Uuid>,
+    },
     /// List API keys for a workspace.
     ListApiKeys { workspace_id: Uuid },
     /// Revoke (delete) an API key (see `admin list-api-keys <workspace-id>` for the key ID).
@@ -201,14 +209,18 @@ pub async fn run(command: AdminCommand) -> Result<()> {
         AdminCommand::CreateApiKey {
             workspace_id,
             scope,
+            user,
         } => {
             let scope = ApiKeyScope::from(scope);
-            let created = create_api_key(&pool, workspace_id, scope).await?;
+            let created = create_api_key(&pool, workspace_id, scope, user).await?;
             println!("api key created (the plaintext key is shown ONLY once — store it now)");
             println!("  key:          {}", created.plaintext);
             println!("  key id:       {}", created.id);
             println!("  workspace id: {}", created.workspace_id);
             println!("  scope:        {scope:?}");
+            if let Some(user_id) = created.user_id {
+                println!("  user id:      {user_id}");
+            }
         }
         AdminCommand::ListApiKeys { workspace_id } => {
             let keys = list_api_keys(&pool, workspace_id).await?;
@@ -217,10 +229,13 @@ pub async fn run(command: AdminCommand) -> Result<()> {
             }
             for key in keys {
                 println!(
-                    "{}  {:<8} prefix={}  created={}  last_used={}",
+                    "{}  {:<8} prefix={}  user={}  created={}  last_used={}",
                     key.id,
                     key.scope,
                     key.key_prefix,
+                    key.user_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "-".into()),
                     key.created_at.format("%Y-%m-%d %H:%M"),
                     key.last_used_at
                         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
@@ -258,21 +273,39 @@ async fn create_api_key(
     pool: &PgPool,
     workspace_id: Uuid,
     scope: ApiKeyScope,
+    user_id: Option<Uuid>,
 ) -> Result<CreatedApiKey> {
     // Check the workspace exists up front so the error is clearer than a raw FK violation.
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM identity.workspaces WHERE id = $1")
+    let tenant_id: Option<(Uuid,)> =
+        sqlx::query_as("SELECT tenant_id FROM identity.workspaces WHERE id = $1")
             .bind(workspace_id)
             .fetch_optional(pool)
             .await?;
-    if exists.is_none() {
+    let Some((tenant_id,)) = tenant_id else {
         bail!(
             "workspace '{workspace_id}' does not exist (see `admin list-workspaces <tenant-id>`)"
         );
+    };
+
+    if let Some(user_id) = user_id {
+        let role = tenancy::get_membership_role(pool, tenant_id, user_id).await?;
+        let Some(role) = role else {
+            bail!(
+                "user '{user_id}' is not a member of tenant '{tenant_id}' \
+                 (see `admin add-member`)"
+            );
+        };
+        let max_scope = role.max_scope();
+        if scope > max_scope {
+            bail!(
+                "user '{user_id}' has role {role:?} in this tenant, which permits at most \
+                 {max_scope:?} scope keys (requested {scope:?})"
+            );
+        }
     }
 
     let mut conn = pool.acquire().await?;
-    let created = auth::create_api_key(&mut conn, workspace_id, scope)
+    let created = auth::create_api_key(&mut conn, workspace_id, scope, user_id)
         .await
         .context("failed to create api key")?;
     Ok(created)
@@ -283,13 +316,14 @@ struct ApiKeySummary {
     id: Uuid,
     scope: String,
     key_prefix: String,
+    user_id: Option<Uuid>,
     created_at: chrono::DateTime<chrono::Utc>,
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 async fn list_api_keys(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<ApiKeySummary>> {
     let rows = sqlx::query_as::<_, ApiKeySummary>(
-        "SELECT id, scope, key_prefix, created_at, last_used_at \
+        "SELECT id, scope, key_prefix, user_id, created_at, last_used_at \
          FROM identity.api_keys WHERE workspace_id = $1 ORDER BY created_at",
     )
     .bind(workspace_id)
@@ -382,11 +416,12 @@ mod tests {
     async fn creates_workspace_and_issues_a_usable_key(pool: PgPool) {
         let workspace_id = seed_workspace(&pool).await;
 
-        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Write)
+        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Write, None)
             .await
             .unwrap();
         assert_eq!(created.workspace_id, workspace_id);
         assert!(created.plaintext.starts_with("ysr_"));
+        assert_eq!(created.user_id, None);
 
         // Confirm the issued key actually authenticates, not just that creation returned Ok.
         let ctx = auth::authenticate(&pool, &created.plaintext).await.unwrap();
@@ -396,7 +431,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_key_creation_for_unknown_workspace(pool: PgPool) {
-        let result = create_api_key(&pool, Uuid::nil(), ApiKeyScope::Read).await;
+        let result = create_api_key(&pool, Uuid::nil(), ApiKeyScope::Read, None).await;
         let Err(err) = result else {
             panic!("key creation should fail for an unknown workspace");
         };
@@ -404,9 +439,53 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    async fn create_api_key_for_user_is_capped_by_their_role(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "default", None)
+            .await
+            .unwrap();
+        let user = tenancy::create_user(&pool, "viewer@example.com", "pw", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant.id, user.id, MembershipRole::Viewer)
+            .await
+            .unwrap();
+
+        // A viewer may be issued a read-scope key...
+        let created = create_api_key(&pool, workspace.id, ApiKeyScope::Read, Some(user.id))
+            .await
+            .unwrap();
+        assert_eq!(created.user_id, Some(user.id));
+
+        // ...but not a write- or schema-scope one.
+        let result = create_api_key(&pool, workspace.id, ApiKeyScope::Write, Some(user.id)).await;
+        let Err(err) = result else {
+            panic!("a viewer should not be issuable a write-scope key");
+        };
+        assert!(err.to_string().contains("Viewer"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_api_key_rejects_a_user_who_is_not_a_member(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "default", None)
+            .await
+            .unwrap();
+        let user = tenancy::create_user(&pool, "outsider@example.com", "pw", None)
+            .await
+            .unwrap();
+
+        let result = create_api_key(&pool, workspace.id, ApiKeyScope::Read, Some(user.id)).await;
+        let Err(err) = result else {
+            panic!("a non-member should not be issuable an api key");
+        };
+        assert!(err.to_string().contains("not a member"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
     async fn revoked_key_no_longer_authenticates(pool: PgPool) {
         let workspace_id = seed_workspace(&pool).await;
-        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Read)
+        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Read, None)
             .await
             .unwrap();
         auth::authenticate(&pool, &created.plaintext).await.unwrap();

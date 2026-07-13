@@ -93,7 +93,8 @@ $ make admin ARGS="list-tenants"
 | `admin create-user <email> <password> [--display-name <name>]` | 人間のユーザーアカウントを作成 |
 | `admin add-member <tenant-id> <user-id> <role>` | ユーザーのテナントへのメンバーシップを追加（または既存のroleを変更）（`owner`/`admin`/`member`/`viewer`） |
 | `admin list-members <tenant-id>` | テナントのメンバーとそのroleの一覧 |
-| `admin list-api-keys <workspace-id>` | キーの一覧（ID・scope・prefix・最終使用日時） |
+| `admin create-api-key <workspace-id> <scope> [--user <user-id>]` | APIキーを発行（`--user`でメンバーに紐付け可能） |
+| `admin list-api-keys <workspace-id>` | キーの一覧（ID・scope・prefix・紐付けユーザー・最終使用日時） |
 | `admin revoke-api-key <key-id>` | キーの即時失効（漏洩時など） |
 | `admin resync-embeddings <workspace-id>` | embedding未生成のentityを再同期（同期失敗からの回復） |
 
@@ -104,3 +105,18 @@ $ make admin ARGS="list-tenants"
 
 scopeは3段階の包含関係: `read` < `write` < `schema`。
 `write`キーは読み取りもでき、`schema`キーはスキーマ登録を含む全操作ができます。
+
+### キーをユーザーに紐付ける
+
+Yorishiroはapi-frontendが前提（ログイン・セッションの仕組みはなく、人間の操作も自動化も
+すべてAPIキー経由）なので、マルチユーザーのアクセス制御はセッションではなくメンバーのroleに
+キーを紐付ける形で実現しています。`create-api-key`に`--user <user-id>`を渡すとそのメンバーに
+キーが紐付き、要求できるscopeは`MembershipRole::max_scope()`で上限が決まります:
+`owner`/`admin`は`schema`まで、`member`は`write`まで、`viewer`は`read`まで発行可能です。
+この上限を超えるscopeの要求や、ワークスペースの所属テナントのメンバーでないユーザーへの
+紐付けは、発行時点で拒否されます。このチェックはキー発行時に一度だけ行われ、キー自体のscope
+と同様にリクエストのたびに再評価されるわけではありません。そのため、メンバーシップを剥奪して
+もすでに発行済みのキーのscopeが遡って狭まることはありません（その場合はキー自体を失効させて
+ください）。サービス・自動化用の紐付け不要なキーには`--user`を省略してください（roleによる
+上限はかかりません）。`GET /whoami`はワークスペース・テナント・scopeに加えて、紐付けられた
+`user_id`（未紐付けなら`null`）も返します。

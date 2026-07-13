@@ -6,12 +6,12 @@
 -- authentication result, plus tenant_id (joined from the workspace) so callers can set both
 -- session variables without a second round trip.
 CREATE FUNCTION identity.authenticate_api_key(p_key_hash bytea)
-RETURNS TABLE (id uuid, workspace_id uuid, tenant_id uuid, scope text)
+RETURNS TABLE (id uuid, workspace_id uuid, tenant_id uuid, scope text, user_id uuid)
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = pg_catalog, identity
 AS $$
-  SELECT k.id, k.workspace_id, w.tenant_id, k.scope
+  SELECT k.id, k.workspace_id, w.tenant_id, k.scope, k.user_id
   FROM identity.api_keys k
   JOIN identity.workspaces w ON w.id = k.workspace_id
   WHERE k.key_hash = p_key_hash

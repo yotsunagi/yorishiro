@@ -95,7 +95,8 @@ Other admin commands:
 | `admin create-user <email> <password> [--display-name <name>]` | Create a human user account |
 | `admin add-member <tenant-id> <user-id> <role>` | Add (or change the role of) a user's membership in a tenant (`owner`/`admin`/`member`/`viewer`) |
 | `admin list-members <tenant-id>` | List a tenant's members and their roles |
-| `admin list-api-keys <workspace-id>` | List keys (ID, scope, prefix, last used) |
+| `admin create-api-key <workspace-id> <scope> [--user <user-id>]` | Issue an API key, optionally attributed to a member |
+| `admin list-api-keys <workspace-id>` | List keys (ID, scope, prefix, attributed user, last used) |
 | `admin revoke-api-key <key-id>` | Immediately revoke a key (e.g. on leakage) |
 | `admin resync-embeddings <workspace-id>` | Re-sync entities missing an embedding (recovery from a failed sync) |
 
@@ -106,3 +107,18 @@ All APIs authenticate via `Authorization: Bearer <api-key>`. Keys are strings st
 
 Scopes form a three-level hierarchy: `read` < `write` < `schema`. A `write` key can also
 read, and a `schema` key can perform every operation, including schema registration.
+
+### Attributing keys to users
+
+Since Yorishiro is API-first (there's no login/session flow — every request, human or
+automated, goes through an API key), multi-user access control works by tying a key to a
+member's role rather than by a session. Passing `--user <user-id>` to `create-api-key`
+attributes the key to that member and caps the requested scope at
+`MembershipRole::max_scope()`: `owner`/`admin` may be issued up to `schema`, `member` up to
+`write`, and `viewer` up to `read`. Requesting a scope above that cap, or attributing a key
+to someone who isn't a member of the workspace's tenant, is rejected at issuance time. This
+check runs once, when the key is created — like a key's scope itself, it isn't re-evaluated
+on every request, so revoking a user's membership doesn't retroactively narrow keys already
+issued to them (revoke the key instead). Omit `--user` for unattributed service/automation
+keys, which aren't capped by any role. `GET /whoami` echoes the attributed `user_id` (or
+`null`) alongside the workspace, tenant, and scope.

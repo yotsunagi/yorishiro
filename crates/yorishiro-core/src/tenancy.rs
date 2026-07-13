@@ -12,6 +12,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::ApiKeyScope;
 use crate::error::YorishiroError;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -68,6 +69,17 @@ impl MembershipRole {
             "member" => Some(MembershipRole::Member),
             "viewer" => Some(MembershipRole::Viewer),
             _ => None,
+        }
+    }
+
+    /// The highest API key scope a member with this role may be issued. Enforced at key
+    /// issuance time (see `admin create-api-key --user`), not re-checked afterward -- this
+    /// mirrors how a key's scope is otherwise fixed for its lifetime until revoked.
+    pub fn max_scope(self) -> ApiKeyScope {
+        match self {
+            MembershipRole::Owner | MembershipRole::Admin => ApiKeyScope::Schema,
+            MembershipRole::Member => ApiKeyScope::Write,
+            MembershipRole::Viewer => ApiKeyScope::Read,
         }
     }
 }
@@ -284,6 +296,31 @@ pub async fn add_member(
     Ok(())
 }
 
+/// Looks up a single user's role within a tenant, or `None` if they aren't a member.
+pub async fn get_membership_role(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<MembershipRole>, YorishiroError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM identity.tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    row.map(|(role,)| {
+        MembershipRole::from_db_str(&role).ok_or_else(|| {
+            YorishiroError::Internal(anyhow::anyhow!(
+                "unknown membership role in database: {role}"
+            ))
+        })
+    })
+    .transpose()
+}
+
 pub async fn list_members(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -422,6 +459,41 @@ mod tests {
         let members = list_members(&pool, tenant.id).await.unwrap();
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].role, MembershipRole::Viewer);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn get_membership_role_resolves_and_defaults_to_none(pool: PgPool) {
+        let tenant = create_tenant(&pool, "team", None).await.unwrap();
+        let user = create_user(&pool, "erin@example.com", "pw", None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_membership_role(&pool, tenant.id, user.id)
+                .await
+                .unwrap(),
+            None
+        );
+
+        add_member(&pool, tenant.id, user.id, MembershipRole::Member)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_membership_role(&pool, tenant.id, user.id)
+                .await
+                .unwrap(),
+            Some(MembershipRole::Member)
+        );
+    }
+
+    #[test]
+    fn max_scope_mirrors_role_privilege_order() {
+        use crate::auth::ApiKeyScope;
+
+        assert_eq!(MembershipRole::Owner.max_scope(), ApiKeyScope::Schema);
+        assert_eq!(MembershipRole::Admin.max_scope(), ApiKeyScope::Schema);
+        assert_eq!(MembershipRole::Member.max_scope(), ApiKeyScope::Write);
+        assert_eq!(MembershipRole::Viewer.max_scope(), ApiKeyScope::Read);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
