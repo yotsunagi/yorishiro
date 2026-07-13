@@ -53,6 +53,7 @@ impl AppState {
     pub fn spawn_embedding_sync(
         &self,
         tenant_id: Uuid,
+        workspace_id: Uuid,
         record: EntityRecord,
     ) -> tokio::task::JoinHandle<()> {
         let db = self.tenant_db.clone();
@@ -71,12 +72,12 @@ impl AppState {
 
             let result = async {
                 let mut conn = db
-                    .acquire_for_tenant(tenant_id)
+                    .acquire_for_workspace(tenant_id, workspace_id)
                     .await
                     .map_err(|err| YorishiroError::Internal(err.into()))?;
                 embedding_sync::sync_embedding_for_record(
                     &mut conn,
-                    tenant_id,
+                    workspace_id,
                     &record,
                     provider.as_ref(),
                 )

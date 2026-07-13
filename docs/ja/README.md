@@ -23,7 +23,7 @@ flowchart TD
         RESTAdapter --> Core
     end
 
-    DB[("PostgreSQL 18 + pgvector<br/>（RLSによるテナント分離）")]
+    DB[("PostgreSQL 18 + pgvector<br/>（identity/contentスキーマ、RLSによる分離）")]
 
     MCPClient -->|"/mcp"| MCPAdapter
     RESTClient -->|"/api/*"| RESTAdapter
@@ -32,9 +32,23 @@ flowchart TD
 
 - **cargo workspace**: `yorishiro-core`（ドメインロジック）と`yorishiro-server`（HTTPサーバ・アダプタ層）。
   DBへ直接アクセスするのは`yorishiro-server`プロセスのみ。
-- **テナント分離**: 全テーブルにPostgreSQLのRow Level Securityを適用。リクエストごとに
-  APIキーからテナントを解決し、セッション変数`app.current_tenant`を設定したコネクションでのみ
-  データへ到達できる。アプリは専用ロール（`yorishiro_app`、`BYPASSRLS`なし）で動作する。
+- **2階層のテナント構造**: **テナント**（組織/アカウント。owner/admin/member/viewerの
+  ロールで複数の人間の**ユーザー**を紐付け可能）が複数の**ワークスペース**を持ち、
+  全てのコンテンツ（スキーマ/エンティティ/リレーション）とAPIキーはちょうど1つの
+  ワークスペースに属する。これにより1つの組織内で複数の独立したプロジェクト
+  （本番/ステージング、チームごとのワークスペースなど）を、テナントを分けずに
+  運用でき、また複数人で同一テナントの管理権限を共有できる。
+- **RLSによる分離**: 全テーブルにPostgreSQLのRow Level Securityを適用。リクエストごとに
+  APIキーからワークスペース（とその所属テナント）を解決し、セッション変数
+  `app.current_tenant`/`app.current_workspace`を設定したコネクションでのみデータへ
+  到達できる。アプリは専用ロール（`yorishiro_app`、`BYPASSRLS`なし）で動作し、
+  制御プレーンのテーブル（`identity.tenants`/`identity.users`/
+  `identity.tenant_memberships`）にはこのロールから一切アクセスできない
+  （マイグレーションロールで動く管理CLIのみが操作可能）。
+- **課金対応のクォータ**: テナントの`max_workspaces`とワークスペースの`max_entities`は、
+  それぞれワークスペース作成時・エンティティ作成時に強制される。どちらもデフォルトは
+  `NULL`（無制限）で、これはセルフホスト運用に適した既定値。ホスティング提供時は
+  プランごとに明示的な上限を設定できる。
 - **スキーマバージョニング**: 同名スキーマの再登録は新バージョンとして追加され、破壊的変更
   （フィールド削除・型変更・必須化など）は差分として報告される。既存エンティティは
   作成時点のスキーマバージョンに対して検証され続ける。
@@ -62,14 +76,14 @@ $ make init
 ```
 
 起動時にマイグレーションが自動適用されます。詳しいセットアップ手順（起動方法、
-エンドポイント一覧、テナント/APIキーの発行、認証モデル）は
+エンドポイント一覧、テナント/ワークスペース/ユーザー/APIキーの発行、認証モデル）は
 [docs/ja/setup.md](setup.md)を参照してください。
 
 ## ドキュメント一覧
 
 | ドキュメント | 内容 |
 |---|---|
-| [docs/ja/setup.md](setup.md) | セットアップ手順一式（起動・エンドポイント・テナント/APIキー発行・認証とscope） |
+| [docs/ja/setup.md](setup.md) | セットアップ手順一式（起動・エンドポイント・テナント/ワークスペース/ユーザー/APIキー発行・認証とscope） |
 | [docs/ja/schema.md](schema.md) | エンティティ型・リレーションを定義するメタスキーマガイド |
 | [docs/ja/api.md](api.md) | REST APIとMCPツールのリファレンス |
 | [docs/ja/embedding-providers.md](embedding-providers.md) | 埋め込みプロバイダの設定（`openai`互換 / ローカル`local` ONNX） |

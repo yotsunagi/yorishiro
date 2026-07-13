@@ -1,0 +1,33 @@
+{
+  "name": "task-management",
+  "description": "Tasks grouped into projects, a starting point for project-tracking schemas.",
+  "entity_types": {
+    "project": {
+      "description": "A project that groups related tasks.",
+      "fields": {
+        "title": { "type": "string", "required": true, "x-embed": true },
+        "description": { "type": "string", "x-embed": true }
+      }
+    },
+    "task": {
+      "description": "A unit of work belonging to a project.",
+      "fields": {
+        "title": { "type": "string", "required": true, "x-embed": true },
+        "notes": { "type": "string", "x-embed": true },
+        "status": {
+          "type": "string",
+          "enum": ["todo", "in_progress", "done"],
+          "default": "todo"
+        },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
+      }
+    }
+  },
+  "relation_types": {
+    "belongs_to": {
+      "source": "task",
+      "target": "project",
+      "description": "The project a task belongs to."
+    }
+  }
+}

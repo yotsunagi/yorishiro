@@ -1,4 +1,5 @@
 mod entities;
+mod recall;
 mod relations;
 mod schemas;
 mod search;
@@ -27,6 +28,7 @@ impl YorishiroMcpServer {
         Self {
             state,
             tool_router: Self::tool_router_entities()
+                + Self::tool_router_recall()
                 + Self::tool_router_relations()
                 + Self::tool_router_search()
                 + Self::tool_router_schemas(),
@@ -113,7 +115,7 @@ pub(super) enum ScopeOutcome {
 
 /// Connection-less version of `authorize`, for tools (search) that run a slow step
 /// such as embedding generation in between, so the pool connection isn't held idle
-/// during it. Acquire a connection afterward via `state.tenant_db.acquire_for_tenant`.
+/// during it. Acquire a connection afterward via `state.tenant_db.acquire_for_workspace`.
 pub(super) async fn authorize_scope_only(
     state: &AppState,
     parts: &Parts,

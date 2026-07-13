@@ -13,6 +13,7 @@ use yorishiro_core::YorishiroError;
 use yorishiro_core::auth::ApiKeyScope;
 use yorishiro_core::metaschema::{self, MetaSchemaDefinition};
 use yorishiro_core::schemas;
+use yorishiro_core::templates;
 
 use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
 
@@ -31,8 +32,13 @@ pub struct CreateSchemaArgs {
     /// JSON object conforming to `MetaSchemaDefinition`
     /// (name/description/entity_types/relation_types). If a schema with the same
     /// name already exists, whether the change is breaking or non-breaking is
-    /// detected automatically and it is registered as a new version.
-    pub definition: Value,
+    /// detected automatically and it is registered as a new version. Mutually
+    /// exclusive with `template_id`; exactly one of the two must be set.
+    pub definition: Option<Value>,
+    /// ID of a built-in template to use as the definition instead of supplying one
+    /// inline. See `list_templates` for the available IDs. Mutually exclusive with
+    /// `definition`; exactly one of the two must be set.
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -57,8 +63,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match schemas::list(authorized.conn(), tenant_id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match schemas::list(authorized.conn(), workspace_id).await {
             Ok(summaries) => ok_json(summaries),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -77,8 +83,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match schemas::get_active_schema(authorized.conn(), tenant_id, &args.name).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match schemas::get_active_schema(authorized.conn(), workspace_id, &args.name).await {
             Ok(record) => ok_json(record),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -97,8 +103,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match schemas::get_by_id(authorized.conn(), tenant_id, args.schema_id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match schemas::get_by_id(authorized.conn(), workspace_id, args.schema_id).await {
             Ok(record) => ok_json(record),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -118,27 +124,64 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let definition: MetaSchemaDefinition = match serde_json::from_value(args.definition) {
-            Ok(definition) => definition,
-            Err(err) => {
+        let definition: MetaSchemaDefinition = match (args.definition, args.template_id) {
+            (Some(_), Some(_)) => {
                 return Ok(err_to_tool_result(YorishiroError::ValidationFailed {
-                    message: format!("invalid schema definition: {err}"),
+                    message: "definition and template_id are mutually exclusive".into(),
                     details: vec![],
-                    hint: "Check the structure of MetaSchemaDefinition \
-                           (name/description/entity_types/relation_types)"
-                        .into(),
+                    hint: "Set exactly one of `definition` or `template_id`".into(),
                 }));
             }
+            (None, None) => {
+                return Ok(err_to_tool_result(YorishiroError::ValidationFailed {
+                    message: "one of definition or template_id is required".into(),
+                    details: vec![],
+                    hint: "Set exactly one of `definition` or `template_id`".into(),
+                }));
+            }
+            (Some(definition), None) => match serde_json::from_value(definition) {
+                Ok(definition) => definition,
+                Err(err) => {
+                    return Ok(err_to_tool_result(YorishiroError::ValidationFailed {
+                        message: format!("invalid schema definition: {err}"),
+                        details: vec![],
+                        hint: "Check the structure of MetaSchemaDefinition \
+                               (name/description/entity_types/relation_types)"
+                            .into(),
+                    }));
+                }
+            },
+            (None, Some(template_id)) => match templates::get_template(&template_id) {
+                Ok(definition) => definition,
+                Err(err) => return Ok(err_to_tool_result(err)),
+            },
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match schemas::create_schema(authorized.conn(), tenant_id, definition).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match schemas::create_schema(authorized.conn(), workspace_id, definition).await {
             Ok((record, diff)) => ok_json(serde_json::json!({
                 "schema": record,
                 "diff": diff,
             })),
             Err(err) => Ok(err_to_tool_result(err)),
         }
+    }
+
+    #[tool(
+        description = "List built-in schema templates that can be passed as `template_id` to \
+                           `create_schema` instead of writing a definition from scratch \
+                           (requires read scope)"
+    )]
+    pub async fn list_templates(
+        &self,
+        Extension(parts): Extension<Parts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
+            AuthzOutcome::Authorized(_) => {}
+            AuthzOutcome::ScopeDenied(result) => return Ok(result),
+        };
+
+        ok_json(templates::list_templates())
     }
 
     #[tool(
@@ -156,9 +199,10 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
+        let workspace_id = authorized.ctx.workspace_id;
         let record =
-            match schemas::get_active_schema(authorized.conn(), tenant_id, &args.schema_name).await
+            match schemas::get_active_schema(authorized.conn(), workspace_id, &args.schema_name)
+                .await
             {
                 Ok(record) => record,
                 Err(err) => return Ok(err_to_tool_result(err)),

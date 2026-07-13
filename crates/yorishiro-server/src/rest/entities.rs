@@ -7,6 +7,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use yorishiro_core::entities::{self, EntityRecord};
+use yorishiro_core::recall::{self, RecallContext};
 
 use crate::auth::{Authorized, ReadScope, WriteScope};
 use crate::error::ApiError;
@@ -29,6 +30,8 @@ pub struct UpdateEntityRequest {
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ListEntitiesParams {
     pub entity_type: Option<String>,
+    /// JSON-encoded containment filter, e.g. `{"status":"active"}`.
+    pub filter: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -51,14 +54,14 @@ pub async fn create_entity(
     mut authorized: Authorized<WriteScope>,
     Json(body): Json<CreateEntityRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
+    let workspace_id = authorized.ctx.workspace_id;
     let input = entities::CreateEntityInput {
         schema_name: body.schema_name,
         entity_type: body.entity_type,
         data: body.data,
     };
-    let record = entities::create(authorized.conn(), tenant_id, input).await?;
-    state.spawn_embedding_sync(tenant_id, record.clone());
+    let record = entities::create(authorized.conn(), workspace_id, input).await?;
+    state.spawn_embedding_sync(authorized.ctx.tenant_id, workspace_id, record.clone());
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -78,8 +81,8 @@ pub async fn get_entity(
     mut authorized: Authorized<ReadScope>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<EntityRecord>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = entities::get(authorized.conn(), tenant_id, id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = entities::get(authorized.conn(), workspace_id, id).await?;
     Ok(Json(record))
 }
 
@@ -103,9 +106,9 @@ pub async fn update_entity(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateEntityRequest>,
 ) -> Result<Json<EntityRecord>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = entities::update(authorized.conn(), tenant_id, id, body.data).await?;
-    state.spawn_embedding_sync(tenant_id, record.clone());
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = entities::update(authorized.conn(), workspace_id, id, body.data).await?;
+    state.spawn_embedding_sync(authorized.ctx.tenant_id, workspace_id, record.clone());
     Ok(Json(record))
 }
 
@@ -125,8 +128,8 @@ pub async fn delete_entity(
     mut authorized: Authorized<WriteScope>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    entities::delete(authorized.conn(), tenant_id, id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    entities::delete(authorized.conn(), workspace_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -148,11 +151,45 @@ pub async fn list_entities(
     let default = entities::ListEntitiesQuery::default();
     let query = entities::ListEntitiesQuery {
         entity_type: params.entity_type,
+        filter: crate::rest::parse_filter_param(params.filter)?,
         limit: params.limit.unwrap_or(default.limit),
         offset: params.offset.unwrap_or(default.offset),
     };
 
-    let tenant_id = authorized.ctx.tenant_id;
-    let records = entities::list(authorized.conn(), tenant_id, query).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let records = entities::list(authorized.conn(), workspace_id, query).await?;
     Ok(Json(records))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct EntityContextParams {
+    /// Maximum number of relations/neighbors to include (defaults to 20 if omitted).
+    pub limit: Option<i64>,
+    /// When true, neighbor entities include every field instead of only `x-embed` fields
+    /// (defaults to false).
+    pub full: Option<bool>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/entities/{id}/context",
+    params(("id" = Uuid, Path, description = "Entity ID"), EntityContextParams),
+    responses(
+        (status = 200, description = "Entity, its relations, and connected neighbors", body = RecallContext),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Entity not found", body = crate::error::ApiErrorBody),
+    ),
+    tag = "entities",
+)]
+pub async fn get_entity_context(
+    mut authorized: Authorized<ReadScope>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<EntityContextParams>,
+) -> Result<Json<RecallContext>, ApiError> {
+    let workspace_id = authorized.ctx.workspace_id;
+    let limit = params.limit.unwrap_or(recall::DEFAULT_RECALL_LIMIT);
+    let full = params.full.unwrap_or(false);
+    let context = recall::recall_context(authorized.conn(), workspace_id, id, limit, full).await?;
+    Ok(Json(context))
 }

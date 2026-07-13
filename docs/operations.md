@@ -15,12 +15,19 @@ volume snapshots alone can produce an inconsistent backup.
 
 ## Rate limiting
 
-There is currently no per-API-key or per-tenant rate limiting or quota mechanism. A single
-API key making heavy use of embedding generation or search can delay other requests. This is
-especially true for `YSR_EMBEDDING_PROVIDER=local` (local ONNX inference), which serializes
-inference behind a single mutex — so embedding generation for other tenants can be blocked
-too, not just the same tenant. Introduce per-API-key rate limiting at a reverse proxy layer
-(nginx, Envoy, etc.) if needed.
+There is currently no per-API-key or per-tenant *rate* limiting (request throughput isn't
+capped anywhere). A single API key making heavy use of embedding generation or search can
+delay other requests. This is especially true for `YSR_EMBEDDING_PROVIDER=local` (local ONNX
+inference), which serializes inference behind a single mutex — so embedding generation for
+other tenants can be blocked too, not just the same tenant. Introduce per-API-key rate
+limiting at a reverse proxy layer (nginx, Envoy, etc.) if needed.
+
+Separately, there *is* a resource-count quota mechanism (not a rate limit): a tenant's
+`max_workspaces` and a workspace's `max_entities` are enforced at creation time. Both default
+to `NULL` (unlimited), so a self-hosted deployment sees no caps unless an operator explicitly
+sets one via `admin create-tenant --max-workspaces`/`admin create-workspace --max-entities`.
+This bounds how large a tenant/workspace can grow, but does nothing to smooth out request
+rate — the two mechanisms are complementary, not substitutes for each other.
 
 ## Observability
 

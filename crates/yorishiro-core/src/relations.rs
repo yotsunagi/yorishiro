@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sea_query::{Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -15,7 +15,7 @@ use crate::schemas;
 enum Relations {
     Table,
     Id,
-    TenantId,
+    WorkspaceId,
     SourceId,
     TargetId,
     RelationType,
@@ -26,7 +26,7 @@ enum Relations {
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct RelationRecord {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub workspace_id: Uuid,
     pub source_id: Uuid,
     pub target_id: Uuid,
     pub relation_type: String,
@@ -71,12 +71,12 @@ impl Default for ListRelationsQuery {
 /// evolves.
 async fn validate_relation_type(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     source: &entities::EntityRecord,
     target: &entities::EntityRecord,
     relation_type: &str,
 ) -> Result<(), YorishiroError> {
-    let schema = schemas::get_by_id(conn, tenant_id, source.schema_id).await?;
+    let schema = schemas::get_by_id(conn, workspace_id, source.schema_id).await?;
 
     let relation_def = schema
         .definition
@@ -106,12 +106,12 @@ async fn validate_relation_type(
 /// relation_type matches the metaschema's source/target constraint, then persists it.
 pub async fn create(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     input: CreateRelationInput,
 ) -> Result<RelationRecord, YorishiroError> {
-    let source = entities::get(conn, tenant_id, input.source_id).await?;
-    let target = entities::get(conn, tenant_id, input.target_id).await?;
-    validate_relation_type(conn, tenant_id, &source, &target, &input.relation_type).await?;
+    let source = entities::get(conn, workspace_id, input.source_id).await?;
+    let target = entities::get(conn, workspace_id, input.target_id).await?;
+    validate_relation_type(conn, workspace_id, &source, &target, &input.relation_type).await?;
 
     let properties = if input.properties.is_null() {
         json!({})
@@ -120,16 +120,16 @@ pub async fn create(
     };
 
     let (sql, values) = Query::insert()
-        .into_table(Relations::Table)
+        .into_table((Alias::new("content"), Relations::Table))
         .columns([
-            Relations::TenantId,
+            Relations::WorkspaceId,
             Relations::SourceId,
             Relations::TargetId,
             Relations::RelationType,
             Relations::Properties,
         ])
         .values_panic([
-            tenant_id.into(),
+            workspace_id.into(),
             input.source_id.into(),
             input.target_id.into(),
             input.relation_type.clone().into(),
@@ -137,7 +137,7 @@ pub async fn create(
         ])
         .returning(Query::returning().columns([
             Relations::Id,
-            Relations::TenantId,
+            Relations::WorkspaceId,
             Relations::SourceId,
             Relations::TargetId,
             Relations::RelationType,
@@ -171,21 +171,21 @@ pub async fn create(
 
 pub async fn get(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     id: Uuid,
 ) -> Result<RelationRecord, YorishiroError> {
     let (sql, values) = Query::select()
         .columns([
             Relations::Id,
-            Relations::TenantId,
+            Relations::WorkspaceId,
             Relations::SourceId,
             Relations::TargetId,
             Relations::RelationType,
             Relations::Properties,
             Relations::CreatedAt,
         ])
-        .from(Relations::Table)
-        .and_where(Expr::col(Relations::TenantId).eq(tenant_id))
+        .from((Alias::new("content"), Relations::Table))
+        .and_where(Expr::col(Relations::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Relations::Id).eq(id))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -200,12 +200,12 @@ pub async fn get(
 
 pub async fn delete(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     id: Uuid,
 ) -> Result<(), YorishiroError> {
     let (sql, values) = Query::delete()
-        .from_table(Relations::Table)
-        .and_where(Expr::col(Relations::TenantId).eq(tenant_id))
+        .from_table((Alias::new("content"), Relations::Table))
+        .and_where(Expr::col(Relations::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Relations::Id).eq(id))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -225,7 +225,7 @@ pub async fn delete(
 
 pub async fn list(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     query: ListRelationsQuery,
 ) -> Result<Vec<RelationRecord>, YorishiroError> {
     let limit = query.limit.clamp(1, 200);
@@ -235,15 +235,15 @@ pub async fn list(
     builder
         .columns([
             Relations::Id,
-            Relations::TenantId,
+            Relations::WorkspaceId,
             Relations::SourceId,
             Relations::TargetId,
             Relations::RelationType,
             Relations::Properties,
             Relations::CreatedAt,
         ])
-        .from(Relations::Table)
-        .and_where(Expr::col(Relations::TenantId).eq(tenant_id));
+        .from((Alias::new("content"), Relations::Table))
+        .and_where(Expr::col(Relations::WorkspaceId).eq(workspace_id));
     if let Some(source_id) = query.source_id {
         builder.and_where(Expr::col(Relations::SourceId).eq(source_id));
     }
@@ -263,6 +263,117 @@ pub async fn list(
         .fetch_all(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Fetches every relation for the tenant, with no pagination limit, for a full-tenant export.
+pub async fn export_all(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+) -> Result<Vec<RelationRecord>, YorishiroError> {
+    sqlx::query_as::<_, RelationRecord>(
+        "SELECT id, workspace_id, source_id, target_id, relation_type, properties, created_at \
+         FROM content.relations WHERE workspace_id = $1 ORDER BY created_at",
+    )
+    .bind(workspace_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+pub const DEFAULT_NEIGHBORS_LIMIT: i64 = 20;
+
+/// A relation together with the entity on the other end of it, relative to the entity
+/// `neighbors` was called for. `direction` is `"out"` when the queried entity is the
+/// relation's source (the neighbor is the target) and `"in"` when it's the target (the
+/// neighbor is the source).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct Neighbor {
+    pub relation_id: Uuid,
+    pub relation_type: String,
+    pub direction: String,
+    #[schema(value_type = Object)]
+    pub properties: Value,
+    pub entity: entities::EntityRecord,
+}
+
+#[derive(sqlx::FromRow)]
+struct NeighborRow {
+    relation_id: Uuid,
+    relation_type: String,
+    direction: String,
+    properties: Value,
+    // Only used to drive the SQL-level ORDER BY; not read on the Rust side.
+    #[allow(dead_code)]
+    relation_created_at: DateTime<Utc>,
+    entity_id: Uuid,
+    entity_tenant_id: Uuid,
+    entity_schema_id: Uuid,
+    entity_schema_version: i32,
+    entity_type: String,
+    entity_data: Value,
+    entity_created_at: DateTime<Utc>,
+    entity_updated_at: DateTime<Utc>,
+}
+
+impl NeighborRow {
+    fn into_neighbor(self) -> Neighbor {
+        Neighbor {
+            relation_id: self.relation_id,
+            relation_type: self.relation_type,
+            direction: self.direction,
+            properties: self.properties,
+            entity: entities::EntityRecord {
+                id: self.entity_id,
+                workspace_id: self.entity_tenant_id,
+                schema_id: self.entity_schema_id,
+                schema_version: self.entity_schema_version,
+                entity_type: self.entity_type,
+                data: self.entity_data,
+                created_at: self.entity_created_at,
+                updated_at: self.entity_updated_at,
+            },
+        }
+    }
+}
+
+/// Returns the entities directly connected to `entity_id` by a relation, in either
+/// direction, together with the relation_type and direction of each connection. Ordered by
+/// the relation's creation time, most recent first.
+pub async fn neighbors(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+    entity_id: Uuid,
+    limit: i64,
+) -> Result<Vec<Neighbor>, YorishiroError> {
+    let limit = limit.clamp(1, 200);
+
+    let rows = sqlx::query_as::<_, NeighborRow>(
+        "SELECT r.id AS relation_id, r.relation_type, 'out' AS direction, r.properties, \
+                r.created_at AS relation_created_at, \
+                e.id AS entity_id, e.workspace_id AS entity_tenant_id, e.schema_id AS entity_schema_id, \
+                e.schema_version AS entity_schema_version, e.entity_type, e.data AS entity_data, \
+                e.created_at AS entity_created_at, e.updated_at AS entity_updated_at \
+         FROM content.relations r \
+         JOIN content.entities e ON e.id = r.target_id AND e.workspace_id = r.workspace_id \
+         WHERE r.workspace_id = $1 AND r.source_id = $2 \
+         UNION ALL \
+         SELECT r.id, r.relation_type, 'in' AS direction, r.properties, r.created_at, \
+                e.id, e.workspace_id, e.schema_id, e.schema_version, e.entity_type, e.data, \
+                e.created_at, e.updated_at \
+         FROM content.relations r \
+         JOIN content.entities e ON e.id = r.source_id AND e.workspace_id = r.workspace_id \
+         WHERE r.workspace_id = $1 AND r.target_id = $2 \
+         ORDER BY relation_created_at DESC \
+         LIMIT $3",
+    )
+    .bind(workspace_id)
+    .bind(entity_id)
+    .bind(limit)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    Ok(rows.into_iter().map(NeighborRow::into_neighbor).collect())
 }
 
 #[cfg(test)]
@@ -288,26 +399,35 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_tenant(pool: &PgPool) -> Uuid {
-        let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-            .bind("test-tenant")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        id
+    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
+        let (tenant_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
+                .bind("test-tenant")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (workspace_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("test-workspace")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (tenant_id, workspace_id)
     }
 
     async fn seed_task_and_project(
         conn: &mut PgConnection,
-        tenant_id: Uuid,
+        workspace_id: Uuid,
     ) -> (entities::EntityRecord, entities::EntityRecord) {
-        schemas::create_schema(conn, tenant_id, project_task_schema())
+        schemas::create_schema(conn, workspace_id, project_task_schema())
             .await
             .unwrap();
 
         let task = entities::create(
             conn,
-            tenant_id,
+            workspace_id,
             entities::CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -319,7 +439,7 @@ mod tests {
 
         let project = entities::create(
             conn,
-            tenant_id,
+            workspace_id,
             entities::CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "project".into(),
@@ -334,14 +454,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn creates_and_fetches_relation(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         let created = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -355,22 +478,25 @@ mod tests {
         assert_eq!(created.relation_type, "belongs_to");
         assert_eq!(created.properties, json!({}));
 
-        let fetched = get(&mut conn, tenant_id, created.id).await.unwrap();
+        let fetched = get(&mut conn, workspace_id, created.id).await.unwrap();
         assert_eq!(fetched.source_id, task.id);
         assert_eq!(fetched.target_id, project.id);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_relation_type_with_mismatched_source_target(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         // reversed: belongs_to expects source=task target=project, not the other way around.
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: project.id,
                 target_id: task.id,
@@ -386,14 +512,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_relation_with_nonexistent_source(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (_, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (_, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: Uuid::nil(),
                 target_id: project.id,
@@ -409,14 +538,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_unknown_relation_type(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -432,14 +564,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_duplicate_relation(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -452,7 +587,7 @@ mod tests {
 
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -468,14 +603,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn deleting_entity_cascades_relation_deletion(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         let relation = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -486,24 +624,27 @@ mod tests {
         .await
         .unwrap();
 
-        entities::delete(&mut conn, tenant_id, task.id)
+        entities::delete(&mut conn, workspace_id, task.id)
             .await
             .unwrap();
 
-        let err = get(&mut conn, tenant_id, relation.id).await.unwrap_err();
+        let err = get(&mut conn, workspace_id, relation.id).await.unwrap_err();
         assert!(matches!(err, YorishiroError::NotFound { .. }));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn deletes_relation(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         let relation = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -514,29 +655,37 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&mut conn, tenant_id, relation.id).await.unwrap();
+        delete(&mut conn, workspace_id, relation.id).await.unwrap();
 
-        let err = get(&mut conn, tenant_id, relation.id).await.unwrap_err();
+        let err = get(&mut conn, workspace_id, relation.id).await.unwrap_err();
         assert!(matches!(err, YorishiroError::NotFound { .. }));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn delete_reports_not_found_for_missing_relation(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
 
-        let err = delete(&mut conn, tenant_id, Uuid::nil()).await.unwrap_err();
+        let err = delete(&mut conn, workspace_id, Uuid::nil())
+            .await
+            .unwrap_err();
         assert!(matches!(err, YorishiroError::NotFound { .. }));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn enforces_tenant_isolation(pool: PgPool) {
-        let tenant_a = seed_tenant(&pool).await;
-        let tenant_b = seed_tenant(&pool).await;
+        let (tenant_a_tenant, tenant_a) = seed_workspace(&pool).await;
+        let (tenant_b_tenant, tenant_b) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
 
-        let mut conn_a = db.acquire_for_tenant(tenant_a).await.unwrap();
+        let mut conn_a = db
+            .acquire_for_workspace(tenant_a_tenant, tenant_a)
+            .await
+            .unwrap();
         let (task, project) = seed_task_and_project(&mut conn_a, tenant_a).await;
         let relation = create(
             &mut conn_a,
@@ -551,7 +700,10 @@ mod tests {
         .await
         .unwrap();
 
-        let mut conn_b = db.acquire_for_tenant(tenant_b).await.unwrap();
+        let mut conn_b = db
+            .acquire_for_workspace(tenant_b_tenant, tenant_b)
+            .await
+            .unwrap();
         let result = get(&mut conn_b, tenant_b, relation.id).await;
         assert!(matches!(result, Err(YorishiroError::NotFound { .. })));
 
@@ -573,14 +725,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn lists_relations_filtered_by_source(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let (task, project) = seed_task_and_project(&mut conn, tenant_id).await;
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
 
         create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateRelationInput {
                 source_id: task.id,
                 target_id: project.id,
@@ -593,7 +748,7 @@ mod tests {
 
         let relations = list(
             &mut conn,
-            tenant_id,
+            workspace_id,
             ListRelationsQuery {
                 source_id: Some(task.id),
                 ..Default::default()
@@ -604,5 +759,61 @@ mod tests {
 
         assert_eq!(relations.len(), 1);
         assert_eq!(relations[0].target_id, project.id);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn neighbors_returns_both_directions_with_relation_type(pool: PgPool) {
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, project) = seed_task_and_project(&mut conn, workspace_id).await;
+
+        create(
+            &mut conn,
+            workspace_id,
+            CreateRelationInput {
+                source_id: task.id,
+                target_id: project.id,
+                relation_type: "belongs_to".into(),
+                properties: Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+
+        let from_task = neighbors(&mut conn, workspace_id, task.id, DEFAULT_NEIGHBORS_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(from_task.len(), 1);
+        assert_eq!(from_task[0].direction, "out");
+        assert_eq!(from_task[0].relation_type, "belongs_to");
+        assert_eq!(from_task[0].entity.id, project.id);
+
+        let from_project = neighbors(&mut conn, workspace_id, project.id, DEFAULT_NEIGHBORS_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(from_project.len(), 1);
+        assert_eq!(from_project[0].direction, "in");
+        assert_eq!(from_project[0].relation_type, "belongs_to");
+        assert_eq!(from_project[0].entity.id, task.id);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn neighbors_is_empty_when_no_relations_exist(pool: PgPool) {
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        let (task, _project) = seed_task_and_project(&mut conn, workspace_id).await;
+
+        let result = neighbors(&mut conn, workspace_id, task.id, DEFAULT_NEIGHBORS_LIMIT)
+            .await
+            .unwrap();
+        assert!(result.is_empty());
     }
 }

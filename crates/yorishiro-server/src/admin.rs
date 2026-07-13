@@ -3,23 +3,57 @@ use clap::{Subcommand, ValueEnum};
 use sqlx::PgPool;
 use uuid::Uuid;
 use yorishiro_core::auth::{self, ApiKeyScope, CreatedApiKey};
+use yorishiro_core::tenancy::{self, MembershipRole};
 
-/// Subcommands under `yorishiro-server admin`. API keys are stored only as SHA-256 hashes,
-/// so issuing one can't be done by hand in SQL — this CLI is the only bootstrap mechanism.
+/// Subcommands under `yorishiro-server admin`. API keys are stored only as SHA-256 hashes and
+/// user passwords only as argon2 hashes, so neither can be provisioned by hand in SQL — this
+/// CLI is the only bootstrap mechanism.
 #[derive(Subcommand)]
 pub enum AdminCommand {
-    /// Create a new tenant.
-    CreateTenant { name: String },
-    /// Issue a new API key for a tenant (see `admin list-tenants` for the tenant ID).
-    CreateApiKey { tenant_id: Uuid, scope: ScopeArg },
-    /// List API keys for a tenant.
-    ListApiKeys { tenant_id: Uuid },
-    /// Revoke (delete) an API key (see `admin list-api-keys <tenant-id>` for the key ID).
-    RevokeApiKey { key_id: Uuid },
-    /// Re-sync embeddings for entities whose embedding is still missing.
-    ResyncEmbeddings { tenant_id: Uuid },
+    /// Create a new tenant, along with a default workspace under it.
+    CreateTenant {
+        name: String,
+        /// Cap on the number of workspaces this tenant may create. Omit for unlimited
+        /// (the default, appropriate for self-hosted deployments).
+        #[arg(long)]
+        max_workspaces: Option<i32>,
+    },
     /// List all tenants.
     ListTenants,
+    /// Create an additional workspace under a tenant (see `admin list-tenants` for the tenant ID).
+    CreateWorkspace {
+        tenant_id: Uuid,
+        name: String,
+        /// Cap on the number of entities this workspace may hold. Omit for unlimited.
+        #[arg(long)]
+        max_entities: Option<i32>,
+    },
+    /// List workspaces under a tenant.
+    ListWorkspaces { tenant_id: Uuid },
+    /// Create a human user account.
+    CreateUser {
+        email: String,
+        password: String,
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+    /// Add (or change the role of) a user's membership in a tenant.
+    AddMember {
+        tenant_id: Uuid,
+        user_id: Uuid,
+        role: RoleArg,
+    },
+    /// List a tenant's members.
+    ListMembers { tenant_id: Uuid },
+    /// Issue a new API key for a workspace (see `admin list-workspaces <tenant-id>` for the
+    /// workspace ID).
+    CreateApiKey { workspace_id: Uuid, scope: ScopeArg },
+    /// List API keys for a workspace.
+    ListApiKeys { workspace_id: Uuid },
+    /// Revoke (delete) an API key (see `admin list-api-keys <workspace-id>` for the key ID).
+    RevokeApiKey { key_id: Uuid },
+    /// Re-sync embeddings for entities whose embedding is still missing.
+    ResyncEmbeddings { workspace_id: Uuid },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -39,9 +73,29 @@ impl From<ScopeArg> for ApiKeyScope {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum RoleArg {
+    Owner,
+    Admin,
+    Member,
+    Viewer,
+}
+
+impl From<RoleArg> for MembershipRole {
+    fn from(value: RoleArg) -> Self {
+        match value {
+            RoleArg::Owner => MembershipRole::Owner,
+            RoleArg::Admin => MembershipRole::Admin,
+            RoleArg::Member => MembershipRole::Member,
+            RoleArg::Viewer => MembershipRole::Viewer,
+        }
+    }
+}
+
 /// Entry point for the admin subcommands. Unlike a plain server start (no args), this
 /// operates on the database directly using the DATABASE_URL connection role (the admin
-/// role that can run migrations).
+/// role that can run migrations and is the only role with write access to `identity.tenants`/
+/// `identity.users`/`identity.tenant_memberships`).
 pub async fn run(command: AdminCommand) -> Result<()> {
     let database_url =
         std::env::var("DATABASE_URL").context("DATABASE_URL must be set for admin commands")?;
@@ -53,25 +107,113 @@ pub async fn run(command: AdminCommand) -> Result<()> {
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
     match command {
-        AdminCommand::CreateTenant { name } => {
-            let tenant_id = create_tenant(&pool, &name).await?;
+        AdminCommand::CreateTenant {
+            name,
+            max_workspaces,
+        } => {
+            let tenant = tenancy::create_tenant(&pool, &name, max_workspaces).await?;
+            let workspace = tenancy::create_workspace(&pool, tenant.id, "default", None).await?;
             println!("tenant created");
-            println!("  id:   {tenant_id}");
-            println!("  name: {name}");
+            println!("  id:            {}", tenant.id);
+            println!("  name:          {}", tenant.name);
+            println!("  max_workspaces: {}", format_limit(tenant.max_workspaces));
+            println!("default workspace created");
+            println!("  id:   {}", workspace.id);
+            println!("  name: {}", workspace.name);
         }
-        AdminCommand::CreateApiKey { tenant_id, scope } => {
+        AdminCommand::ListTenants => {
+            let tenants = tenancy::list_tenants(&pool).await?;
+            if tenants.is_empty() {
+                println!("no tenants (create one with `admin create-tenant <name>`)");
+            }
+            for tenant in tenants {
+                println!(
+                    "{}  {:<24} max_workspaces={}",
+                    tenant.id,
+                    tenant.name,
+                    format_limit(tenant.max_workspaces)
+                );
+            }
+        }
+        AdminCommand::CreateWorkspace {
+            tenant_id,
+            name,
+            max_entities,
+        } => {
+            let workspace = tenancy::create_workspace(&pool, tenant_id, &name, max_entities)
+                .await
+                .map_err(anyhow::Error::from)?;
+            println!("workspace created");
+            println!("  id:           {}", workspace.id);
+            println!("  tenant id:    {}", workspace.tenant_id);
+            println!("  name:         {}", workspace.name);
+            println!("  max_entities: {}", format_limit(workspace.max_entities));
+        }
+        AdminCommand::ListWorkspaces { tenant_id } => {
+            let workspaces = tenancy::list_workspaces(&pool, tenant_id)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if workspaces.is_empty() {
+                println!("no workspaces for tenant {tenant_id}");
+            }
+            for workspace in workspaces {
+                println!(
+                    "{}  {:<24} max_entities={}",
+                    workspace.id,
+                    workspace.name,
+                    format_limit(workspace.max_entities)
+                );
+            }
+        }
+        AdminCommand::CreateUser {
+            email,
+            password,
+            display_name,
+        } => {
+            let user = tenancy::create_user(&pool, &email, &password, display_name.as_deref())
+                .await
+                .map_err(anyhow::Error::from)?;
+            println!("user created");
+            println!("  id:    {}", user.id);
+            println!("  email: {}", user.email);
+        }
+        AdminCommand::AddMember {
+            tenant_id,
+            user_id,
+            role,
+        } => {
+            tenancy::add_member(&pool, tenant_id, user_id, role.into())
+                .await
+                .map_err(anyhow::Error::from)?;
+            println!("membership added: user {user_id} is now {role:?} of tenant {tenant_id}");
+        }
+        AdminCommand::ListMembers { tenant_id } => {
+            let members = tenancy::list_members(&pool, tenant_id)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if members.is_empty() {
+                println!("no members for tenant {tenant_id}");
+            }
+            for member in members {
+                println!("{}  {:<8?} {}", member.user_id, member.role, member.email);
+            }
+        }
+        AdminCommand::CreateApiKey {
+            workspace_id,
+            scope,
+        } => {
             let scope = ApiKeyScope::from(scope);
-            let created = create_api_key(&pool, tenant_id, scope).await?;
+            let created = create_api_key(&pool, workspace_id, scope).await?;
             println!("api key created (the plaintext key is shown ONLY once — store it now)");
-            println!("  key:       {}", created.plaintext);
-            println!("  key id:    {}", created.id);
-            println!("  tenant id: {}", created.tenant_id);
-            println!("  scope:     {scope:?}");
+            println!("  key:          {}", created.plaintext);
+            println!("  key id:       {}", created.id);
+            println!("  workspace id: {}", created.workspace_id);
+            println!("  scope:        {scope:?}");
         }
-        AdminCommand::ListApiKeys { tenant_id } => {
-            let keys = list_api_keys(&pool, tenant_id).await?;
+        AdminCommand::ListApiKeys { workspace_id } => {
+            let keys = list_api_keys(&pool, workspace_id).await?;
             if keys.is_empty() {
-                println!("no api keys for tenant {tenant_id}");
+                println!("no api keys for workspace {workspace_id}");
             }
             for key in keys {
                 println!(
@@ -90,66 +232,50 @@ pub async fn run(command: AdminCommand) -> Result<()> {
             revoke_api_key(&pool, key_id).await?;
             println!("api key {key_id} revoked (takes effect on the next request)");
         }
-        AdminCommand::ResyncEmbeddings { tenant_id } => {
+        AdminCommand::ResyncEmbeddings { workspace_id } => {
             let provider = crate::build_embedding_provider()
                 .context("embedding provider must be configured (see .env.example)")?;
-            let report = resync_embeddings(&pool, tenant_id, provider.as_ref()).await?;
+            let report = resync_embeddings(&pool, workspace_id, provider.as_ref()).await?;
             println!(
                 "resync finished: {} entities had no embedding, {} synced, {} failed \
                  (entities whose entity_type has no x-embed field stay without embedding)",
                 report.candidates, report.synced, report.failed,
             );
         }
-        AdminCommand::ListTenants => {
-            let tenants = list_tenants(&pool).await?;
-            if tenants.is_empty() {
-                println!("no tenants (create one with `admin create-tenant <name>`)");
-            }
-            for (id, name) in tenants {
-                println!("{id}  {name}");
-            }
-        }
     }
 
     Ok(())
 }
 
-async fn create_tenant(pool: &PgPool, name: &str) -> Result<Uuid> {
-    let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .context("failed to create tenant")?;
-    Ok(id)
+fn format_limit(limit: Option<i32>) -> String {
+    match limit {
+        Some(n) => n.to_string(),
+        None => "unlimited".to_string(),
+    }
 }
 
 async fn create_api_key(
     pool: &PgPool,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     scope: ApiKeyScope,
 ) -> Result<CreatedApiKey> {
-    // Check the tenant exists up front so the error is clearer than a raw FK violation.
-    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE id = $1")
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?;
+    // Check the workspace exists up front so the error is clearer than a raw FK violation.
+    let exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM identity.workspaces WHERE id = $1")
+            .bind(workspace_id)
+            .fetch_optional(pool)
+            .await?;
     if exists.is_none() {
-        bail!("tenant '{tenant_id}' does not exist (see `admin list-tenants`)");
+        bail!(
+            "workspace '{workspace_id}' does not exist (see `admin list-workspaces <tenant-id>`)"
+        );
     }
 
     let mut conn = pool.acquire().await?;
-    let created = auth::create_api_key(&mut conn, tenant_id, scope)
+    let created = auth::create_api_key(&mut conn, workspace_id, scope)
         .await
         .context("failed to create api key")?;
     Ok(created)
-}
-
-async fn list_tenants(pool: &PgPool) -> Result<Vec<(Uuid, String)>> {
-    let rows: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT id, name FROM tenants ORDER BY created_at")
-            .fetch_all(pool)
-            .await?;
-    Ok(rows)
 }
 
 #[derive(sqlx::FromRow)]
@@ -161,12 +287,12 @@ struct ApiKeySummary {
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-async fn list_api_keys(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ApiKeySummary>> {
+async fn list_api_keys(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<ApiKeySummary>> {
     let rows = sqlx::query_as::<_, ApiKeySummary>(
         "SELECT id, scope, key_prefix, created_at, last_used_at \
-         FROM api_keys WHERE tenant_id = $1 ORDER BY created_at",
+         FROM identity.api_keys WHERE workspace_id = $1 ORDER BY created_at",
     )
-    .bind(tenant_id)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -175,12 +301,12 @@ async fn list_api_keys(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ApiKeySumma
 /// Authentication looks up the key in the database on every request, so deleting the row
 /// revokes it immediately.
 async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<()> {
-    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
+    let result = sqlx::query("DELETE FROM identity.api_keys WHERE id = $1")
         .bind(key_id)
         .execute(pool)
         .await?;
     if result.rows_affected() == 0 {
-        bail!("api key '{key_id}' does not exist (see `admin list-api-keys <tenant-id>`)");
+        bail!("api key '{key_id}' does not exist (see `admin list-api-keys <workspace-id>`)");
     }
     Ok(())
 }
@@ -196,14 +322,15 @@ struct ResyncReport {
 /// (e.g. a transient embedding API outage or a process killed mid-deploy).
 async fn resync_embeddings(
     pool: &PgPool,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     provider: &dyn yorishiro_core::embedding::EmbeddingProvider,
 ) -> Result<ResyncReport> {
-    let ids: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM entities WHERE tenant_id = $1 AND embedding IS NULL")
-            .bind(tenant_id)
-            .fetch_all(pool)
-            .await?;
+    let ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM content.entities WHERE workspace_id = $1 AND embedding IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_all(pool)
+    .await?;
 
     let mut report = ResyncReport {
         candidates: ids.len(),
@@ -213,9 +340,12 @@ async fn resync_embeddings(
     let mut conn = pool.acquire().await?;
     for (entity_id,) in ids {
         let result = async {
-            let record = yorishiro_core::entities::get(&mut conn, tenant_id, entity_id).await?;
+            let record = yorishiro_core::entities::get(&mut conn, workspace_id, entity_id).await?;
             yorishiro_core::embedding_sync::sync_embedding_for_record(
-                &mut conn, tenant_id, &record, provider,
+                &mut conn,
+                workspace_id,
+                &record,
+                provider,
             )
             .await
         }
@@ -238,44 +368,50 @@ mod tests {
 
     use super::*;
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn creates_tenant_and_issues_a_usable_key(pool: PgPool) {
-        let tenant_id = create_tenant(&pool, "bootstrap-tenant").await.unwrap();
-
-        let created = create_api_key(&pool, tenant_id, ApiKeyScope::Write)
+    async fn seed_workspace(pool: &PgPool) -> Uuid {
+        let tenant = tenancy::create_tenant(pool, "bootstrap-tenant", None)
             .await
             .unwrap();
-        assert_eq!(created.tenant_id, tenant_id);
+        let workspace = tenancy::create_workspace(pool, tenant.id, "default", None)
+            .await
+            .unwrap();
+        workspace.id
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn creates_workspace_and_issues_a_usable_key(pool: PgPool) {
+        let workspace_id = seed_workspace(&pool).await;
+
+        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Write)
+            .await
+            .unwrap();
+        assert_eq!(created.workspace_id, workspace_id);
         assert!(created.plaintext.starts_with("ysr_"));
 
         // Confirm the issued key actually authenticates, not just that creation returned Ok.
         let ctx = auth::authenticate(&pool, &created.plaintext).await.unwrap();
-        assert_eq!(ctx.tenant_id, tenant_id);
+        assert_eq!(ctx.workspace_id, workspace_id);
         assert_eq!(ctx.scope, ApiKeyScope::Write);
-
-        let tenants = list_tenants(&pool).await.unwrap();
-        assert_eq!(tenants.len(), 1);
-        assert_eq!(tenants[0].1, "bootstrap-tenant");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn rejects_key_creation_for_unknown_tenant(pool: PgPool) {
+    async fn rejects_key_creation_for_unknown_workspace(pool: PgPool) {
         let result = create_api_key(&pool, Uuid::nil(), ApiKeyScope::Read).await;
         let Err(err) = result else {
-            panic!("key creation should fail for an unknown tenant");
+            panic!("key creation should fail for an unknown workspace");
         };
         assert!(err.to_string().contains("does not exist"));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn revoked_key_no_longer_authenticates(pool: PgPool) {
-        let tenant_id = create_tenant(&pool, "revoke-test").await.unwrap();
-        let created = create_api_key(&pool, tenant_id, ApiKeyScope::Read)
+        let workspace_id = seed_workspace(&pool).await;
+        let created = create_api_key(&pool, workspace_id, ApiKeyScope::Read)
             .await
             .unwrap();
         auth::authenticate(&pool, &created.plaintext).await.unwrap();
 
-        let listed = list_api_keys(&pool, tenant_id).await.unwrap();
+        let listed = list_api_keys(&pool, workspace_id).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, created.id);
 
@@ -286,7 +422,7 @@ mod tests {
             result,
             Err(yorishiro_core::YorishiroError::Unauthenticated)
         ));
-        assert!(list_api_keys(&pool, tenant_id).await.unwrap().is_empty());
+        assert!(list_api_keys(&pool, workspace_id).await.unwrap().is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -308,7 +444,7 @@ mod tests {
             }
         }
 
-        let tenant_id = create_tenant(&pool, "resync-test").await.unwrap();
+        let workspace_id = seed_workspace(&pool).await;
         let mut conn = pool.acquire().await.unwrap();
         let definition = serde_json::from_value(serde_json::json!({
             "name": "task-management",
@@ -319,14 +455,14 @@ mod tests {
             }
         }))
         .unwrap();
-        yorishiro_core::schemas::create_schema(&mut conn, tenant_id, definition)
+        yorishiro_core::schemas::create_schema(&mut conn, workspace_id, definition)
             .await
             .unwrap();
         // core's create doesn't write the embedding (that's the adapter's background sync
         // job), so this entity reproduces one left behind by a failed sync.
         let entity = yorishiro_core::entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             yorishiro_core::entities::CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -337,7 +473,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let report = resync_embeddings(&pool, tenant_id, &FixedProvider)
+        let report = resync_embeddings(&pool, workspace_id, &FixedProvider)
             .await
             .unwrap();
         assert_eq!(report.candidates, 1);
@@ -345,11 +481,48 @@ mod tests {
         assert_eq!(report.failed, 0);
 
         let (has_embedding,): (bool,) =
-            sqlx::query_as("SELECT embedding IS NOT NULL FROM entities WHERE id = $1")
+            sqlx::query_as("SELECT embedding IS NOT NULL FROM content.entities WHERE id = $1")
                 .bind(entity.id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert!(has_embedding);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn creates_tenant_workspace_user_and_membership(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let user = tenancy::create_user(&pool, "owner@example.com", "pw", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant.id, user.id, MembershipRole::Owner)
+            .await
+            .unwrap();
+
+        let members = tenancy::list_members(&pool, tenant.id).await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].user_id, user.id);
+        assert_eq!(members[0].role, MembershipRole::Owner);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enforces_workspace_limit_on_create_workspace(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "capped", Some(1))
+            .await
+            .unwrap();
+        // create_tenant alone doesn't create a workspace here (unlike the CLI's CreateTenant
+        // handler, which additionally creates a "default" one); this test drives
+        // tenancy::create_workspace directly to check the cap.
+        tenancy::create_workspace(&pool, tenant.id, "first", None)
+            .await
+            .unwrap();
+
+        let err = tenancy::create_workspace(&pool, tenant.id, "second", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            yorishiro_core::YorishiroError::Conflict { .. }
+        ));
     }
 }

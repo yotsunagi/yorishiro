@@ -281,13 +281,22 @@ mod tests {
         }
     }
 
-    async fn seed_tenant(pool: &PgPool) -> Uuid {
-        let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-            .bind("test-tenant")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        id
+    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
+        let (tenant_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
+                .bind("test-tenant")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (workspace_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("test-workspace")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (tenant_id, workspace_id)
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -327,10 +336,13 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn whoami_returns_tenant_and_scope_for_a_valid_key(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+        let mut conn = db
+            .acquire_for_workspace(tenant_id, workspace_id)
+            .await
+            .unwrap();
+        let created = create_api_key(&mut conn, workspace_id, ApiKeyScope::Write)
             .await
             .unwrap();
         drop(conn);
@@ -355,6 +367,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["tenant_id"], tenant_id.to_string());
+        assert_eq!(json["workspace_id"], workspace_id.to_string());
         assert_eq!(json["scope"], "write");
     }
 
@@ -505,6 +518,8 @@ mod tests {
                 "schema_name": "dummy", "entity_type": "dummy",
             }),
             "search_entities" => serde_json::json!({ "query_text": "dummy" }),
+            "recall_context" => serde_json::json!({ "entity_id": NIL_UUID }),
+            "list_templates" => serde_json::json!({}),
             other => panic!("no dummy arguments registered for tool `{other}`"),
         }
     }
@@ -543,8 +558,8 @@ mod tests {
             .collect();
         assert_eq!(
             tool_names.len(),
-            15,
-            "expected 15 registered tools, got {tool_names:?}"
+            17,
+            "expected 17 registered tools, got {tool_names:?}"
         );
 
         for (index, name) in tool_names.iter().enumerate() {
@@ -576,9 +591,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn mcp_tool_call_with_insufficient_scope_returns_a_tool_error(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
             .await
             .unwrap();
@@ -618,9 +636,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn mcp_tool_call_with_sufficient_scope_succeeds(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
             .await
             .unwrap();
@@ -740,9 +761,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_create_entity_rejects_insufficient_scope(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let created = create_api_key(&mut conn, tenant_id, ApiKeyScope::Read)
             .await
             .unwrap();
@@ -767,9 +791,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_entity_crud_round_trip(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
             .await
             .unwrap();
@@ -869,9 +896,12 @@ mod tests {
     /// background task, so this polls at short intervals until the search hits.
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_created_entity_becomes_searchable(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
             .await
             .unwrap();
@@ -947,11 +977,14 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_enforces_tenant_isolation(pool: PgPool) {
-        let tenant_a = seed_tenant(&pool).await;
-        let tenant_b = seed_tenant(&pool).await;
+        let (tenant_a_tenant, tenant_a) = seed_workspace(&pool).await;
+        let (tenant_b_tenant, tenant_b) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
 
-        let mut conn_a = db.acquire_for_tenant(tenant_a).await.unwrap();
+        let mut conn_a = db
+            .acquire_for_workspace(tenant_a_tenant, tenant_a)
+            .await
+            .unwrap();
         let schema_key_a = create_api_key(&mut conn_a, tenant_a, ApiKeyScope::Schema)
             .await
             .unwrap();
@@ -960,7 +993,10 @@ mod tests {
             .unwrap();
         drop(conn_a);
 
-        let mut conn_b = db.acquire_for_tenant(tenant_b).await.unwrap();
+        let mut conn_b = db
+            .acquire_for_workspace(tenant_b_tenant, tenant_b)
+            .await
+            .unwrap();
         let read_key_b = create_api_key(&mut conn_b, tenant_b, ApiKeyScope::Read)
             .await
             .unwrap();
@@ -1084,9 +1120,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_relation_crud_round_trip(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
             .await
             .unwrap();
@@ -1193,9 +1232,12 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_schema_endpoints_round_trip(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool.clone());
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
         let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
             .await
             .unwrap();
@@ -1324,5 +1366,149 @@ mod tests {
         assert_eq!(listed[0]["status"], "archived");
         assert_eq!(listed[1]["version"], 2);
         assert_eq!(listed[1]["status"], "active");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rest_creates_a_schema_from_a_built_in_template(pool: PgPool) {
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let schema_auth = format!("Bearer {}", schema_key.plaintext);
+
+        let response = rest_request(&app, "GET", "/api/templates", Some(&schema_auth), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let templates = rest_json_body(response).await;
+        let templates = templates.as_array().unwrap();
+        assert!(templates.iter().any(|t| t["id"] == "task-management"));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(serde_json::json!({ "template_id": "task-management" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = rest_json_body(response).await;
+        assert_eq!(created["schema"]["name"], "task-management");
+        assert_eq!(created["schema"]["version"], 1);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(serde_json::json!({ "template_id": "does-not-exist" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rest_export_jsonl_streams_every_record_for_the_tenant(pool: PgPool) {
+        let (tenant_id_tenant, tenant_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db
+            .acquire_for_workspace(tenant_id_tenant, tenant_id)
+            .await
+            .unwrap();
+        let schema_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Schema)
+            .await
+            .unwrap();
+        let write_key = create_api_key(&mut conn, tenant_id, ApiKeyScope::Write)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let schema_auth = format!("Bearer {}", schema_key.plaintext);
+        let write_auth = format!("Bearer {}", write_key.plaintext);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/schemas",
+            Some(&schema_auth),
+            Some(serde_json::json!({
+                "name": "task-management",
+                "entity_types": {
+                    "task": { "fields": { "title": { "type": "string", "required": true } } }
+                },
+                "relation_types": {
+                    "blocks": { "source": "task", "target": "task" }
+                },
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/entities",
+            Some(&write_auth),
+            Some(serde_json::json!({
+                "schema_name": "task-management", "entity_type": "task", "data": { "title": "a" },
+            })),
+        )
+        .await;
+        let a = rest_json_body(response).await;
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/entities",
+            Some(&write_auth),
+            Some(serde_json::json!({
+                "schema_name": "task-management", "entity_type": "task", "data": { "title": "b" },
+            })),
+        )
+        .await;
+        let b = rest_json_body(response).await;
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/relations",
+            Some(&write_auth),
+            Some(serde_json::json!({
+                "source_id": a["id"], "target_id": b["id"], "relation_type": "blocks",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response =
+            rest_request(&app, "GET", "/api/export.jsonl", Some(&write_auth), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/x-ndjson"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let lines: Vec<serde_json::Value> = std::str::from_utf8(&body)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+
+        assert_eq!(lines.iter().filter(|l| l["kind"] == "schema").count(), 1);
+        assert_eq!(lines.iter().filter(|l| l["kind"] == "entity").count(), 2);
+        assert_eq!(lines.iter().filter(|l| l["kind"] == "relation").count(), 1);
+
+        let response = rest_request(&app, "GET", "/api/export.jsonl", None, None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

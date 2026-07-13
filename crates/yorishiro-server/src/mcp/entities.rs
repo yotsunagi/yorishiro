@@ -44,6 +44,8 @@ pub struct DeleteEntityArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListEntitiesArgs {
     pub entity_type: Option<String>,
+    /// JSONB containment filter matched against entity data, e.g. `{"status": "active"}`.
+    pub filter: Option<Value>,
     /// Maximum number of results (defaults to 50 if omitted).
     pub limit: Option<i64>,
     /// Number of records to skip (defaults to 0 if omitted).
@@ -69,10 +71,14 @@ impl YorishiroMcpServer {
             data: args.data,
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match entities::create(authorized.conn(), tenant_id, input).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match entities::create(authorized.conn(), workspace_id, input).await {
             Ok(record) => {
-                self.state.spawn_embedding_sync(tenant_id, record.clone());
+                self.state.spawn_embedding_sync(
+                    authorized.ctx.tenant_id,
+                    workspace_id,
+                    record.clone(),
+                );
                 ok_json(record)
             }
             Err(err) => Ok(err_to_tool_result(err)),
@@ -90,8 +96,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match entities::get(authorized.conn(), tenant_id, args.id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match entities::get(authorized.conn(), workspace_id, args.id).await {
             Ok(record) => ok_json(record),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -108,10 +114,14 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match entities::update(authorized.conn(), tenant_id, args.id, args.data).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match entities::update(authorized.conn(), workspace_id, args.id, args.data).await {
             Ok(record) => {
-                self.state.spawn_embedding_sync(tenant_id, record.clone());
+                self.state.spawn_embedding_sync(
+                    authorized.ctx.tenant_id,
+                    workspace_id,
+                    record.clone(),
+                );
                 ok_json(record)
             }
             Err(err) => Ok(err_to_tool_result(err)),
@@ -129,8 +139,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match entities::delete(authorized.conn(), tenant_id, args.id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match entities::delete(authorized.conn(), workspace_id, args.id).await {
             Ok(()) => ok_json(serde_json::json!({ "deleted": true })),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -150,12 +160,13 @@ impl YorishiroMcpServer {
         let default = entities::ListEntitiesQuery::default();
         let query = entities::ListEntitiesQuery {
             entity_type: args.entity_type,
+            filter: args.filter,
             limit: args.limit.unwrap_or(default.limit),
             offset: args.offset.unwrap_or(default.offset),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match entities::list(authorized.conn(), tenant_id, query).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match entities::list(authorized.conn(), workspace_id, query).await {
             Ok(records) => ok_json(records),
             Err(err) => Ok(err_to_tool_result(err)),
         }

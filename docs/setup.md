@@ -34,38 +34,70 @@ Migrations are applied automatically on startup. Endpoints:
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
-| `http://localhost:8080/whoami` | Authentication check (returns tenant and scope) |
+| `http://localhost:8080/whoami` | Authentication check (returns workspace, tenant, and scope) |
 
-## Provisioning tenants and API keys
+## Tenants, workspaces, and users
 
-API keys are stored in the database only as SHA-256 hashes, so they must be issued through
-the admin CLI (there is no way to issue one via manual SQL):
+Yorishiro's control plane is two-tiered:
+
+- A **tenant** is an organization/account. It can have `max_workspaces` set (a billing cap;
+  `NULL`, the default, means unlimited — appropriate for self-hosted deployments) and can
+  have any number of human **users** attached to it, each with a role (`owner` / `admin` /
+  `member` / `viewer`) recorded in a membership. A user can belong to multiple tenants.
+- A **workspace** belongs to exactly one tenant and is the actual operational container:
+  schemas, entities, relations, and API keys all scope to a workspace, not directly to the
+  tenant. A workspace can have `max_entities` set (also `NULL`/unlimited by default).
+
+Splitting tenant from workspace lets one organization run several isolated projects (e.g.
+separate workspaces per environment or team) without provisioning a whole new tenant for
+each, and lets several people share administrative access to the same tenant via
+memberships. None of this is exposed over the REST/MCP API yet — it's managed entirely
+through the admin CLI below, by whoever holds `DATABASE_URL`.
+
+## Provisioning tenants, workspaces, and API keys
+
+API keys are stored in the database only as SHA-256 hashes and user passwords only as
+argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:
 
 ```console
 $ make admin ARGS="create-tenant my-team"
 tenant created
-  id:   019f565d-f1e3-7afb-b876-b7003e43c230
-  name: my-team
+  id:            019f565d-f1e3-7afb-b876-b7003e43c230
+  name:          my-team
+  max_workspaces: unlimited
+default workspace created
+  id:   019f565d-f204-7f3e-9a1e-2b6b6e2b6b6e
+  name: default
 
-$ make admin ARGS="create-api-key 019f565d-f1e3-7afb-b876-b7003e43c230 write"
+$ make admin ARGS="create-api-key 019f565d-f204-7f3e-9a1e-2b6b6e2b6b6e write"
 api key created (the plaintext key is shown ONLY once — store it now)
-  key:       ysr_928e48292888_ef72...
+  key:          ysr_928e48292888_ef72...
   ...
 
 $ make admin ARGS="list-tenants"
 ```
 
-The plaintext key is shown only once, at issuance time. Admin commands access the database
-directly using the connection role from `DATABASE_URL` (the same administrative role used
-for migrations).
+`create-tenant` also creates a `default` workspace under the new tenant, since most
+deployments only need one workspace per tenant; use `create-workspace` for additional ones.
+The plaintext API key is shown only once, at issuance time. Admin commands access the
+database directly using the connection role from `DATABASE_URL` (the same administrative
+role used for migrations, and the only role permitted to touch
+`identity.tenants`/`identity.users`/`identity.tenant_memberships` at all — the application's
+own `yorishiro_app` role cannot).
 
 Other admin commands:
 
 | Command | Description |
 |---|---|
-| `admin list-api-keys <tenant-id>` | List keys (ID, scope, prefix, last used) |
+| `admin list-tenants` | List all tenants |
+| `admin create-workspace <tenant-id> <name> [--max-entities <n>]` | Create an additional workspace under a tenant |
+| `admin list-workspaces <tenant-id>` | List a tenant's workspaces |
+| `admin create-user <email> <password> [--display-name <name>]` | Create a human user account |
+| `admin add-member <tenant-id> <user-id> <role>` | Add (or change the role of) a user's membership in a tenant (`owner`/`admin`/`member`/`viewer`) |
+| `admin list-members <tenant-id>` | List a tenant's members and their roles |
+| `admin list-api-keys <workspace-id>` | List keys (ID, scope, prefix, last used) |
 | `admin revoke-api-key <key-id>` | Immediately revoke a key (e.g. on leakage) |
-| `admin resync-embeddings <tenant-id>` | Re-sync entities missing an embedding (recovery from a failed sync) |
+| `admin resync-embeddings <workspace-id>` | Re-sync entities missing an embedding (recovery from a failed sync) |
 
 ## Authentication and scopes
 

@@ -17,13 +17,25 @@ $ curl -X POST localhost:8080/api/entities \
     -H "Authorization: Bearer $YSR_KEY" -H "Content-Type: application/json" \
     -d '{"schema_name":"task-management","entity_type":"task","data":{"title":"Buy milk"}}'
 
-# Vector similarity search (read scope)
-$ curl "localhost:8080/api/search?query_text=shopping" -H "Authorization: Bearer $YSR_KEY"
+# Vector similarity search, combined with a structured filter (read scope)
+$ curl "localhost:8080/api/search?query_text=shopping&filter=%7B%22status%22%3A%22active%22%7D" \
+    -H "Authorization: Bearer $YSR_KEY"
+
+# Entity plus its relations and connected neighbors in one call (read scope)
+$ curl "localhost:8080/api/entities/$ENTITY_ID/context" -H "Authorization: Bearer $YSR_KEY"
+
+# Full-workspace JSON Lines export (read scope)
+$ curl "localhost:8080/api/export.jsonl" -H "Authorization: Bearer $YSR_KEY"
 ```
+
+`GET /api/entities` also accepts a `filter` query parameter (a JSON object matched with
+JSONB containment, e.g. `filter={"status":"active"}`), and `POST /api/schemas` accepts
+either an inline definition or `{"template_id": "..."}` to register one of the built-in
+templates listed at `GET /api/templates`.
 
 ## MCP Tools
 
-Connecting to `/mcp` (Streamable HTTP) gives you access to 15 tools. Example connection
+Connecting to `/mcp` (Streamable HTTP) gives you access to 17 tools. Example connection
 from Claude Code:
 
 ```console
@@ -33,11 +45,17 @@ $ claude mcp add --transport http yorishiro http://localhost:8080/mcp \
 
 | Tool | Scope | Description |
 |---|---|---|
-| `create_schema` | schema | Register a meta-schema (adds a new version) |
+| `create_schema` | schema | Register a meta-schema (adds a new version), from an inline `definition` or a `template_id` |
+| `list_templates` | read | List built-in schema templates usable as `create_schema`'s `template_id` |
 | `list_schemas` | read | List a summary of registered schemas (for discovery) |
 | `get_active_schema` | read | Fetch the active schema definition |
 | `get_schema_by_id` | read | Fetch a specific schema version |
 | `get_entity_type_json_schema` | read | Project an entity_type as a JSON Schema |
-| `create_entity` / `get_entity` / `update_entity` / `delete_entity` / `list_entities` | write/read | Entity CRUD |
+| `create_entity` / `get_entity` / `update_entity` / `delete_entity` | write/read | Entity CRUD |
+| `list_entities` | read | List entities, optionally filtered by `entity_type` and/or a `filter` JSONB containment match |
 | `create_relation` / `get_relation` / `delete_relation` / `list_relations` | write/read | Relation CRUD |
-| `search_entities` | read | Vector similarity search over a natural-language query |
+| `search_entities` | read | Vector similarity search over a natural-language query, optionally narrowed by `entity_type`/`filter`; entities without an embedding can still surface via trigram fuzzy matching |
+| `recall_context` | read | Fetch an entity plus its relations and connected neighbors in one call |
+
+The REST-only `GET /api/export.jsonl` endpoint (full-workspace JSON Lines export) has no MCP
+tool equivalent.

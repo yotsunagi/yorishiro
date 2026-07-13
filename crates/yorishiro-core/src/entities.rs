@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use sea_query::{Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::extension::postgres::PgExpr;
+use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::Value;
@@ -15,7 +16,7 @@ use crate::schemas;
 enum Entities {
     Table,
     Id,
-    TenantId,
+    WorkspaceId,
     SchemaId,
     SchemaVersion,
     EntityType,
@@ -29,7 +30,7 @@ enum Entities {
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct EntityRecord {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub workspace_id: Uuid,
     pub schema_id: Uuid,
     pub schema_version: i32,
     pub entity_type: String,
@@ -49,6 +50,8 @@ const DEFAULT_LIST_LIMIT: i64 = 50;
 
 pub struct ListEntitiesQuery {
     pub entity_type: Option<String>,
+    /// JSONB containment filter (`data @> filter`), e.g. `{"status": "active"}`.
+    pub filter: Option<Value>,
     pub limit: i64,
     pub offset: i64,
 }
@@ -57,6 +60,7 @@ impl Default for ListEntitiesQuery {
     fn default() -> Self {
         Self {
             entity_type: None,
+            filter: None,
             limit: DEFAULT_LIST_LIMIT,
             offset: 0,
         }
@@ -127,28 +131,69 @@ fn resolve_entity_type<'a>(
         })
 }
 
+/// Checks the workspace's `max_entities` cap (billing/quota enforcement) before an insert.
+/// `NULL` means unlimited, which is the default so self-hosted deployments are never capped
+/// unless an operator explicitly sets a limit. The app role only has SELECT on
+/// `identity.workspaces`, which is enough to read this column without needing write access to
+/// the control-plane schema.
+async fn check_entity_quota(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+) -> Result<(), YorishiroError> {
+    let max_entities: Option<i32> =
+        sqlx::query_scalar("SELECT max_entities FROM identity.workspaces WHERE id = $1")
+            .bind(workspace_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|err| YorishiroError::Internal(err.into()))?
+            .flatten();
+
+    let Some(max) = max_entities else {
+        return Ok(());
+    };
+
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM content.entities WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    if count >= i64::from(max) {
+        Err(YorishiroError::Conflict {
+            message: format!(
+                "workspace '{workspace_id}' has reached its entity limit ({max}); \
+                 raise max_entities or delete existing entities"
+            ),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 /// Creates a new entity: resolves the schema name to its currently active schema, checks
 /// that the entity_type exists in that version, validates `data`, and persists the result.
 pub async fn create(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     input: CreateEntityInput,
 ) -> Result<EntityRecord, YorishiroError> {
-    let schema = schemas::get_active_schema(conn, tenant_id, &input.schema_name).await?;
+    check_entity_quota(conn, workspace_id).await?;
+    let schema = schemas::get_active_schema(conn, workspace_id, &input.schema_name).await?;
     let entity_type_def = resolve_entity_type(&schema.definition, &input.entity_type)?;
     validate_data(entity_type_def, &input.data)?;
 
     let (sql, values) = Query::insert()
-        .into_table(Entities::Table)
+        .into_table((Alias::new("content"), Entities::Table))
         .columns([
-            Entities::TenantId,
+            Entities::WorkspaceId,
             Entities::SchemaId,
             Entities::SchemaVersion,
             Entities::EntityType,
             Entities::Data,
         ])
         .values_panic([
-            tenant_id.into(),
+            workspace_id.into(),
             schema.id.into(),
             schema.version.into(),
             input.entity_type.into(),
@@ -156,7 +201,7 @@ pub async fn create(
         ])
         .returning(Query::returning().columns([
             Entities::Id,
-            Entities::TenantId,
+            Entities::WorkspaceId,
             Entities::SchemaId,
             Entities::SchemaVersion,
             Entities::EntityType,
@@ -174,13 +219,13 @@ pub async fn create(
 
 pub async fn get(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     id: Uuid,
 ) -> Result<EntityRecord, YorishiroError> {
     let (sql, values) = Query::select()
         .columns([
             Entities::Id,
-            Entities::TenantId,
+            Entities::WorkspaceId,
             Entities::SchemaId,
             Entities::SchemaVersion,
             Entities::EntityType,
@@ -188,8 +233,8 @@ pub async fn get(
             Entities::CreatedAt,
             Entities::UpdatedAt,
         ])
-        .from(Entities::Table)
-        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Entities::Id).eq(id))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -208,24 +253,24 @@ pub async fn get(
 /// has since moved on.
 pub async fn update(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     id: Uuid,
     data: Value,
 ) -> Result<EntityRecord, YorishiroError> {
-    let existing = get(conn, tenant_id, id).await?;
-    let schema = schemas::get_by_id(conn, tenant_id, existing.schema_id).await?;
+    let existing = get(conn, workspace_id, id).await?;
+    let schema = schemas::get_by_id(conn, workspace_id, existing.schema_id).await?;
     let entity_type_def = resolve_entity_type(&schema.definition, &existing.entity_type)?;
     validate_data(entity_type_def, &data)?;
 
     let (sql, values) = Query::update()
-        .table(Entities::Table)
+        .table((Alias::new("content"), Entities::Table))
         .value(Entities::Data, data)
         .value(Entities::UpdatedAt, Expr::cust("now()"))
-        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Entities::Id).eq(id))
         .returning(Query::returning().columns([
             Entities::Id,
-            Entities::TenantId,
+            Entities::WorkspaceId,
             Entities::SchemaId,
             Entities::SchemaVersion,
             Entities::EntityType,
@@ -246,12 +291,12 @@ pub async fn update(
 
 pub async fn delete(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     id: Uuid,
 ) -> Result<(), YorishiroError> {
     let (sql, values) = Query::delete()
-        .from_table(Entities::Table)
-        .and_where(Expr::col(Entities::TenantId).eq(tenant_id))
+        .from_table((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Entities::Id).eq(id))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -271,7 +316,7 @@ pub async fn delete(
 
 pub async fn list(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     query: ListEntitiesQuery,
 ) -> Result<Vec<EntityRecord>, YorishiroError> {
     let limit = query.limit.clamp(1, 200);
@@ -281,7 +326,7 @@ pub async fn list(
     builder
         .columns([
             Entities::Id,
-            Entities::TenantId,
+            Entities::WorkspaceId,
             Entities::SchemaId,
             Entities::SchemaVersion,
             Entities::EntityType,
@@ -289,10 +334,13 @@ pub async fn list(
             Entities::CreatedAt,
             Entities::UpdatedAt,
         ])
-        .from(Entities::Table)
-        .and_where(Expr::col(Entities::TenantId).eq(tenant_id));
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id));
     if let Some(entity_type) = query.entity_type {
         builder.and_where(Expr::col(Entities::EntityType).eq(entity_type));
+    }
+    if let Some(filter) = query.filter {
+        builder.and_where(Expr::col(Entities::Data).contains(filter));
     }
     builder
         .order_by(Entities::CreatedAt, Order::Desc)
@@ -304,6 +352,21 @@ pub async fn list(
         .fetch_all(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Fetches every entity for the tenant, with no pagination limit, for a full-tenant export.
+pub async fn export_all(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+) -> Result<Vec<EntityRecord>, YorishiroError> {
+    sqlx::query_as::<_, EntityRecord>(
+        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, updated_at \
+         FROM content.entities WHERE workspace_id = $1 ORDER BY created_at",
+    )
+    .bind(workspace_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 #[cfg(test)]
@@ -354,28 +417,40 @@ mod tests {
         }
     }
 
-    async fn seed_tenant(pool: &PgPool) -> Uuid {
-        let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-            .bind("test-tenant")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        id
+    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
+        let (tenant_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
+                .bind("test-tenant")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (workspace_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("test-workspace")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (tenant_id, workspace_id)
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn creates_and_fetches_entity(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
 
-        schemas::create_schema(&mut conn, tenant_id, task_schema())
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
             .await
             .unwrap();
 
         let created = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -388,22 +463,25 @@ mod tests {
         assert_eq!(created.entity_type, "task");
         assert_eq!(created.schema_version, 1);
 
-        let fetched = get(&mut conn, tenant_id, created.id).await.unwrap();
+        let fetched = get(&mut conn, workspace_id, created.id).await.unwrap();
         assert_eq!(fetched.data["title"], "buy milk");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_invalid_data(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
             .await
             .unwrap();
 
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -418,16 +496,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rejects_unknown_entity_type(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
             .await
             .unwrap();
 
         let err = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "nonexistent".into(),
@@ -442,11 +523,14 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn enforces_tenant_isolation(pool: PgPool) {
-        let tenant_a = seed_tenant(&pool).await;
-        let tenant_b = seed_tenant(&pool).await;
+        let (tenant_a_tenant, tenant_a) = seed_workspace(&pool).await;
+        let (tenant_b_tenant, tenant_b) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
 
-        let mut conn_a = db.acquire_for_tenant(tenant_a).await.unwrap();
+        let mut conn_a = db
+            .acquire_for_workspace(tenant_a_tenant, tenant_a)
+            .await
+            .unwrap();
         schemas::create_schema(&mut conn_a, tenant_a, task_schema())
             .await
             .unwrap();
@@ -462,23 +546,29 @@ mod tests {
         .await
         .unwrap();
 
-        let mut conn_b = db.acquire_for_tenant(tenant_b).await.unwrap();
+        let mut conn_b = db
+            .acquire_for_workspace(tenant_b_tenant, tenant_b)
+            .await
+            .unwrap();
         let result = get(&mut conn_b, tenant_b, entity.id).await;
         assert!(matches!(result, Err(YorishiroError::NotFound { .. })));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn update_validates_against_creation_time_schema_version(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
 
-        schemas::create_schema(&mut conn, tenant_id, task_schema())
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
             .await
             .unwrap();
         let entity = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -500,13 +590,13 @@ mod tests {
             }
         }))
         .unwrap();
-        schemas::create_schema(&mut conn, tenant_id, v2)
+        schemas::create_schema(&mut conn, workspace_id, v2)
             .await
             .unwrap();
 
         let updated = update(
             &mut conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             json!({ "title": "v1 task updated" }),
         )
@@ -518,15 +608,18 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn delete_removes_entity(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
             .await
             .unwrap();
         let entity = create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -536,19 +629,22 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&mut conn, tenant_id, entity.id).await.unwrap();
-        let err = get(&mut conn, tenant_id, entity.id).await.unwrap_err();
+        delete(&mut conn, workspace_id, entity.id).await.unwrap();
+        let err = get(&mut conn, workspace_id, entity.id).await.unwrap_err();
         assert!(matches!(err, YorishiroError::NotFound { .. }));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn list_filters_by_entity_type(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
         schemas::create_schema(
             &mut conn,
-            tenant_id,
+            workspace_id,
             serde_json::from_value(json!({
                 "name": "task-management",
                 "entity_types": {
@@ -568,7 +664,7 @@ mod tests {
         ] {
             create(
                 &mut conn,
-                tenant_id,
+                workspace_id,
                 CreateEntityInput {
                     schema_name: "task-management".into(),
                     entity_type: entity_type.into(),
@@ -581,9 +677,10 @@ mod tests {
 
         let tasks = list(
             &mut conn,
-            tenant_id,
+            workspace_id,
             ListEntitiesQuery {
                 entity_type: Some("task".into()),
+                filter: None,
                 limit: 10,
                 offset: 0,
             },
@@ -592,5 +689,51 @@ mod tests {
         .unwrap();
         assert_eq!(tasks.len(), 2);
         assert!(tasks.iter().all(|e| e.entity_type == "task"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_filters_by_data_field_value(pool: PgPool) {
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema())
+            .await
+            .unwrap();
+
+        for (title, status) in [
+            ("task one", "active"),
+            ("task two", "done"),
+            ("task three", "active"),
+        ] {
+            create(
+                &mut conn,
+                workspace_id,
+                CreateEntityInput {
+                    schema_name: "task-management".into(),
+                    entity_type: "task".into(),
+                    data: json!({ "title": title, "status": status }),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let active = list(
+            &mut conn,
+            workspace_id,
+            ListEntitiesQuery {
+                entity_type: None,
+                filter: Some(json!({ "status": "active" })),
+                limit: 10,
+                offset: 0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|e| e.data["status"] == "active"));
     }
 }

@@ -43,10 +43,13 @@ where
 
         // Updating last_used_at is best-effort and doesn't affect the auth result;
         // the request proceeds even if it fails.
-        match db.acquire_for_tenant(ctx.tenant_id).await {
+        match db
+            .acquire_for_workspace(ctx.tenant_id, ctx.workspace_id)
+            .await
+        {
             Ok(mut conn) => {
                 if let Err(err) =
-                    auth::touch_last_used(&mut conn, ctx.tenant_id, ctx.api_key_id).await
+                    auth::touch_last_used(&mut conn, ctx.workspace_id, ctx.api_key_id).await
                 {
                     tracing::warn!(error = %err, "failed to update api key last_used_at");
                 }
@@ -125,7 +128,7 @@ where
 /// scope, without acquiring a DB connection. Handlers that do slow work (e.g. generating an
 /// embedding) before touching the database — search, for instance — would otherwise hold a
 /// pool connection idle through `Authorized<R>`; use this instead and call
-/// `TenantDb::acquire_for_tenant` afterward.
+/// `TenantDb::acquire_for_workspace` afterward.
 pub struct Verified<R> {
     pub ctx: auth::AuthContext,
     _scope: PhantomData<R>,

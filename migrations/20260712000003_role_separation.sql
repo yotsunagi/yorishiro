@@ -17,14 +17,28 @@ EXCEPTION
 END
 $$;
 
-ALTER TABLE tenants   FORCE ROW LEVEL SECURITY;
-ALTER TABLE api_keys  FORCE ROW LEVEL SECURITY;
-ALTER TABLE schemas   FORCE ROW LEVEL SECURITY;
-ALTER TABLE entities  FORCE ROW LEVEL SECURITY;
-ALTER TABLE relations FORCE ROW LEVEL SECURITY;
+ALTER TABLE identity.tenants            FORCE ROW LEVEL SECURITY;
+ALTER TABLE identity.tenant_memberships  FORCE ROW LEVEL SECURITY;
+ALTER TABLE identity.workspaces          FORCE ROW LEVEL SECURITY;
+ALTER TABLE identity.api_keys            FORCE ROW LEVEL SECURITY;
+ALTER TABLE content.schemas              FORCE ROW LEVEL SECURITY;
+ALTER TABLE content.entities             FORCE ROW LEVEL SECURITY;
+ALTER TABLE content.relations            FORCE ROW LEVEL SECURITY;
 
-GRANT USAGE ON SCHEMA public TO yorishiro_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO yorishiro_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO yorishiro_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO yorishiro_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO yorishiro_app;
+-- Least privilege: the request-serving role only gets access to what request handling
+-- actually touches today. `identity.tenants`/`tenant_memberships`/`users` are managed
+-- exclusively by the admin CLI, which connects as the owning role (bypassing RLS and these
+-- grants entirely) -- so yorishiro_app gets no grant on them at all yet. Widen this
+-- deliberately (not by default) once a user-facing tenant-management endpoint exists.
+-- `identity.workspaces` is the one exception: it gets a read-only grant because entity
+-- creation reads `max_entities` from it to enforce the per-workspace billing cap.
+GRANT USAGE ON SCHEMA identity TO yorishiro_app;
+GRANT USAGE ON SCHEMA content  TO yorishiro_app;
+
+GRANT SELECT ON identity.workspaces TO yorishiro_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON identity.api_keys TO yorishiro_app;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA content TO yorishiro_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA content TO yorishiro_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA content GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO yorishiro_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA content GRANT USAGE, SELECT ON SEQUENCES TO yorishiro_app;

@@ -13,6 +13,8 @@ use crate::state::AppState;
 pub struct SearchEntitiesParams {
     pub query_text: String,
     pub entity_type: Option<String>,
+    /// JSON-encoded containment filter, e.g. `{"status":"active"}`.
+    pub filter: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -37,6 +39,7 @@ pub async fn search_entities(
     let default = search::SearchQuery::default();
     let query = search::SearchQuery {
         entity_type: params.entity_type,
+        filter: crate::rest::parse_filter_param(params.filter)?,
         limit: params.limit.unwrap_or(default.limit),
     };
 
@@ -46,12 +49,13 @@ pub async fn search_entities(
     // endpoints too.
     let vector = search::embed_query(state.embedding_provider.as_ref(), &params.query_text).await?;
 
-    let tenant_id = verified.ctx.tenant_id;
+    let workspace_id = verified.ctx.workspace_id;
     let mut conn = state
         .tenant_db
-        .acquire_for_tenant(tenant_id)
+        .acquire_for_workspace(verified.ctx.tenant_id, workspace_id)
         .await
         .map_err(|err| ApiError(YorishiroError::Internal(err.into())))?;
-    let hits = search::search_by_vector(&mut conn, tenant_id, vector, query).await?;
+    let hits = search::search_by_vector(&mut conn, workspace_id, vector, &params.query_text, query)
+        .await?;
     Ok(Json(hits))
 }

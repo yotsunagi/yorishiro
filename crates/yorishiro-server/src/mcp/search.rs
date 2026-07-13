@@ -7,6 +7,7 @@ use rmcp::tool;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::auth::ApiKeyScope;
 use yorishiro_core::search;
@@ -16,9 +17,12 @@ use super::{ScopeOutcome, YorishiroMcpServer, authorize_scope_only, err_to_tool_
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchEntitiesArgs {
     /// Natural-language query text. Vectorized via the embedding provider and
-    /// matched against entities' `x-embed` field by cosine distance.
+    /// matched against entities' `x-embed` field by cosine distance. Also used, as-is, for
+    /// an auxiliary pg_trgm fuzzy text match against entities that have no embedding.
     pub query_text: String,
     pub entity_type: Option<String>,
+    /// JSONB containment filter matched against entity data, e.g. `{"status": "active"}`.
+    pub filter: Option<Value>,
     /// Upper bound on the number of results returned (defaults to 10 if omitted).
     pub limit: Option<i64>,
 }
@@ -41,6 +45,7 @@ impl YorishiroMcpServer {
         let default = search::SearchQuery::default();
         let query = search::SearchQuery {
             entity_type: args.entity_type,
+            filter: args.filter,
             limit: args.limit.unwrap_or(default.limit),
         };
 
@@ -55,15 +60,22 @@ impl YorishiroMcpServer {
                 Err(err) => return Ok(err_to_tool_result(err)),
             };
 
-        let tenant_id = ctx.tenant_id;
-        let mut conn = match self.state.tenant_db.acquire_for_tenant(tenant_id).await {
+        let workspace_id = ctx.workspace_id;
+        let mut conn = match self
+            .state
+            .tenant_db
+            .acquire_for_workspace(ctx.tenant_id, workspace_id)
+            .await
+        {
             Ok(conn) => conn,
             Err(err) => {
                 return Ok(err_to_tool_result(YorishiroError::Internal(err.into())));
             }
         };
 
-        match search::search_by_vector(&mut conn, tenant_id, vector, query).await {
+        match search::search_by_vector(&mut conn, workspace_id, vector, &args.query_text, query)
+            .await
+        {
             Ok(hits) => ok_json(hits),
             Err(err) => Ok(err_to_tool_result(err)),
         }

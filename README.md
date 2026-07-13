@@ -24,7 +24,7 @@ flowchart TD
         RESTAdapter --> Core
     end
 
-    DB[("PostgreSQL 18 + pgvector<br/>(tenant isolation via RLS)")]
+    DB[("PostgreSQL 18 + pgvector<br/>(identity + content schemas, RLS isolation)")]
 
     MCPClient -->|"/mcp"| MCPAdapter
     RESTClient -->|"/api/*"| RESTAdapter
@@ -33,10 +33,23 @@ flowchart TD
 
 - **Cargo workspace**: `yorishiro-core` (domain logic) and `yorishiro-server` (HTTP server
   and adapter layer). Only the `yorishiro-server` process accesses the database directly.
-- **Tenant isolation**: PostgreSQL Row Level Security is applied to every table. On each
-  request, the tenant is resolved from the API key, and data can only be reached through a
-  connection that has set the `app.current_tenant` session variable. The application runs
-  as a dedicated role (`yorishiro_app`, without `BYPASSRLS`).
+- **Two-tier tenancy**: a **tenant** (an organization/account, with one or more human
+  **users** attached to it via roles — owner/admin/member/viewer) owns one or more
+  **workspaces**; all content (schemas/entities/relations) and API keys belong to exactly
+  one workspace. This lets one organization keep several isolated projects (e.g. prod/staging,
+  or one workspace per team) without needing separate tenants, and lets several people share
+  administrative access to the same tenant.
+- **Isolation via RLS**: PostgreSQL Row Level Security is applied to every table. On each
+  request, the workspace (and its owning tenant) are resolved from the API key, and data can
+  only be reached through a connection that has set the `app.current_tenant`/
+  `app.current_workspace` session variables. The application runs as a dedicated role
+  (`yorishiro_app`, without `BYPASSRLS`), and control-plane tables
+  (`identity.tenants`/`identity.users`/`identity.tenant_memberships`) aren't reachable by
+  that role at all — only the admin CLI, running as the migration role, can manage them.
+- **Billing-ready quotas**: a tenant's `max_workspaces` and a workspace's `max_entities` are
+  enforced at creation time (workspace creation / entity creation, respectively). Both
+  default to `NULL` (unlimited), which is the right default for self-hosted deployments; a
+  hosted offering can set explicit caps per plan.
 - **Schema versioning**: Re-registering a schema with the same name adds a new version;
   breaking changes (removed fields, type changes, newly required fields, etc.) are reported
   as a diff. Existing entities continue to be validated against the schema version that was
@@ -66,13 +79,14 @@ $ make init
 ```
 
 Migrations are applied automatically on startup. See [docs/setup.md](docs/setup.md) for
-the full setup guide, endpoint list, tenant/API key provisioning, and auth model.
+the full setup guide, endpoint list, tenant/workspace/user/API key provisioning, and auth
+model.
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [docs/setup.md](docs/setup.md) | Full setup guide: startup, endpoints, tenant/API key provisioning, auth & scopes |
+| [docs/setup.md](docs/setup.md) | Full setup guide: startup, endpoints, tenant/workspace/user/API key provisioning, auth & scopes |
 | [docs/schema.md](docs/schema.md) | Meta-schema guide for defining entity types and relations |
 | [docs/api.md](docs/api.md) | REST API and MCP tool reference |
 | [docs/embedding-providers.md](docs/embedding-providers.md) | Configuring embedding providers (`openai`-compatible / `local` ONNX) |

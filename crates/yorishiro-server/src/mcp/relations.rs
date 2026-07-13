@@ -68,8 +68,8 @@ impl YorishiroMcpServer {
             properties: args.properties.unwrap_or_else(|| serde_json::json!({})),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match relations::create(authorized.conn(), tenant_id, input).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match relations::create(authorized.conn(), workspace_id, input).await {
             Ok(record) => ok_json(record),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -86,8 +86,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match relations::get(authorized.conn(), tenant_id, args.id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match relations::get(authorized.conn(), workspace_id, args.id).await {
             Ok(record) => ok_json(record),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -104,8 +104,8 @@ impl YorishiroMcpServer {
             AuthzOutcome::ScopeDenied(result) => return Ok(result),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match relations::delete(authorized.conn(), tenant_id, args.id).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match relations::delete(authorized.conn(), workspace_id, args.id).await {
             Ok(()) => ok_json(serde_json::json!({ "deleted": true })),
             Err(err) => Ok(err_to_tool_result(err)),
         }
@@ -131,8 +131,8 @@ impl YorishiroMcpServer {
             offset: args.offset.unwrap_or(default.offset),
         };
 
-        let tenant_id = authorized.ctx.tenant_id;
-        match relations::list(authorized.conn(), tenant_id, query).await {
+        let workspace_id = authorized.ctx.workspace_id;
+        match relations::list(authorized.conn(), workspace_id, query).await {
             Ok(records) => ok_json(records),
             Err(err) => Ok(err_to_tool_result(err)),
         }

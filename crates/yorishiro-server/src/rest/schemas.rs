@@ -1,12 +1,13 @@
 use axum::Json;
 use axum::extract::Path;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::metaschema::{self, MetaSchemaDefinition, VersioningDiff};
 use yorishiro_core::schemas::{self, SchemaRecord, SchemaSummary};
+use yorishiro_core::templates::{self, TemplateSummary};
 
 use crate::auth::{Authorized, ReadScope, SchemaScope};
 use crate::error::ApiError;
@@ -30,8 +31,8 @@ pub struct CreateSchemaResponse {
 pub async fn list_schemas(
     mut authorized: Authorized<ReadScope>,
 ) -> Result<Json<Vec<SchemaSummary>>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let summaries = schemas::list(authorized.conn(), tenant_id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let summaries = schemas::list(authorized.conn(), workspace_id).await?;
     Ok(Json(summaries))
 }
 
@@ -51,8 +52,8 @@ pub async fn get_active_schema(
     mut authorized: Authorized<ReadScope>,
     Path(name): Path<String>,
 ) -> Result<Json<SchemaRecord>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = schemas::get_active_schema(authorized.conn(), tenant_id, &name).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = schemas::get_active_schema(authorized.conn(), workspace_id, &name).await?;
     Ok(Json(record))
 }
 
@@ -72,19 +73,30 @@ pub async fn get_schema_by_id(
     mut authorized: Authorized<ReadScope>,
     Path(schema_id): Path<Uuid>,
 ) -> Result<Json<SchemaRecord>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = schemas::get_by_id(authorized.conn(), tenant_id, schema_id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = schemas::get_by_id(authorized.conn(), workspace_id, schema_id).await?;
     Ok(Json(record))
+}
+
+/// Either an inline schema definition, or a reference to a built-in template's ID (see
+/// `GET /api/templates`). Untagged so existing clients posting a flat `MetaSchemaDefinition`
+/// body keep working unchanged.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum CreateSchemaRequest {
+    Definition(MetaSchemaDefinition),
+    Template { template_id: String },
 }
 
 #[utoipa::path(
     post,
     path = "/api/schemas",
-    request_body = MetaSchemaDefinition,
+    request_body = CreateSchemaRequest,
     responses(
         (status = 201, description = "Schema newly registered, or added as a new version", body = CreateSchemaResponse),
         (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
         (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The specified template_id does not exist", body = crate::error::ApiErrorBody),
         (status = 409, description = "Version conflict due to concurrent creation", body = crate::error::ApiErrorBody),
         (status = 422, description = "The schema definition itself is invalid", body = crate::error::ApiErrorBody),
     ),
@@ -92,14 +104,36 @@ pub async fn get_schema_by_id(
 )]
 pub async fn create_schema(
     mut authorized: Authorized<SchemaScope>,
-    Json(definition): Json<MetaSchemaDefinition>,
+    Json(body): Json<CreateSchemaRequest>,
 ) -> Result<(axum::http::StatusCode, Json<CreateSchemaResponse>), ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let (schema, diff) = schemas::create_schema(authorized.conn(), tenant_id, definition).await?;
+    let definition = match body {
+        CreateSchemaRequest::Definition(definition) => definition,
+        CreateSchemaRequest::Template { template_id } => templates::get_template(&template_id)?,
+    };
+
+    let workspace_id = authorized.ctx.workspace_id;
+    let (schema, diff) =
+        schemas::create_schema(authorized.conn(), workspace_id, definition).await?;
     Ok((
         axum::http::StatusCode::CREATED,
         Json(CreateSchemaResponse { schema, diff }),
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    responses(
+        (status = 200, description = "Built-in schema templates available for schema creation", body = Vec<TemplateSummary>),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+    ),
+    tag = "schemas",
+)]
+pub async fn list_templates(
+    _authorized: Authorized<ReadScope>,
+) -> Result<Json<Vec<TemplateSummary>>, ApiError> {
+    Ok(Json(templates::list_templates()))
 }
 
 #[utoipa::path(
@@ -121,8 +155,8 @@ pub async fn get_entity_type_json_schema(
     mut authorized: Authorized<ReadScope>,
     Path((name, entity_type)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = schemas::get_active_schema(authorized.conn(), tenant_id, &name).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = schemas::get_active_schema(authorized.conn(), workspace_id, &name).await?;
 
     let entity_type_def = record
         .definition

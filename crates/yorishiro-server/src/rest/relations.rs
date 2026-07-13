@@ -47,14 +47,14 @@ pub async fn create_relation(
     mut authorized: Authorized<WriteScope>,
     Json(body): Json<CreateRelationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
+    let workspace_id = authorized.ctx.workspace_id;
     let input = relations::CreateRelationInput {
         source_id: body.source_id,
         target_id: body.target_id,
         relation_type: body.relation_type,
         properties: body.properties.unwrap_or_else(|| serde_json::json!({})),
     };
-    let record = relations::create(authorized.conn(), tenant_id, input).await?;
+    let record = relations::create(authorized.conn(), workspace_id, input).await?;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -74,8 +74,8 @@ pub async fn get_relation(
     mut authorized: Authorized<ReadScope>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RelationRecord>, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    let record = relations::get(authorized.conn(), tenant_id, id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let record = relations::get(authorized.conn(), workspace_id, id).await?;
     Ok(Json(record))
 }
 
@@ -95,8 +95,8 @@ pub async fn delete_relation(
     mut authorized: Authorized<WriteScope>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let tenant_id = authorized.ctx.tenant_id;
-    relations::delete(authorized.conn(), tenant_id, id).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    relations::delete(authorized.conn(), workspace_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -124,7 +124,7 @@ pub async fn list_relations(
         offset: params.offset.unwrap_or(default.offset),
     };
 
-    let tenant_id = authorized.ctx.tenant_id;
-    let records = relations::list(authorized.conn(), tenant_id, query).await?;
+    let workspace_id = authorized.ctx.workspace_id;
+    let records = relations::list(authorized.conn(), workspace_id, query).await?;
     Ok(Json(records))
 }

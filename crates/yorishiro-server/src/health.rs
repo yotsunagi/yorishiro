@@ -32,7 +32,7 @@ pub async fn up_check() -> (StatusCode, Json<HealthResponse>) {
 /// database with a lightweight query and returns 503 (Service Unavailable) on failure.
 ///
 /// This check doesn't need an RLS tenant context, so it just grabs a connection directly
-/// from the pool instead of going through `TenantDb::acquire_for_tenant` (which also sets
+/// from the pool instead of going through `TenantDb::acquire_for_workspace` (which also sets
 /// `app.current_tenant`).
 pub async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     match check_db(&state).await {

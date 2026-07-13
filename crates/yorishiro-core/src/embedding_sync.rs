@@ -47,7 +47,7 @@ fn compose_embedding_text(entity_type_def: &EntityTypeDef, data: &Value) -> Opti
 ///   and lock contention.
 pub async fn sync_embedding(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     entity_id: Uuid,
     snapshot_updated_at: DateTime<Utc>,
     entity_type_def: &EntityTypeDef,
@@ -66,11 +66,11 @@ pub async fn sync_embedding(
     // embedding API latencies (writing the embedding itself doesn't change
     // `updated_at`, so this condition never blocks a subsequent legitimate sync).
     let result = sqlx::query(
-        "UPDATE entities SET embedding = $1 \
-         WHERE tenant_id = $2 AND id = $3 AND updated_at = $4",
+        "UPDATE content.entities SET embedding = $1 \
+         WHERE workspace_id = $2 AND id = $3 AND updated_at = $4",
     )
     .bind(pgvector::Vector::from(vector))
-    .bind(tenant_id)
+    .bind(workspace_id)
     .bind(entity_id)
     .bind(snapshot_updated_at)
     .execute(&mut *conn)
@@ -98,11 +98,11 @@ pub async fn sync_embedding(
 /// from a separate connection/transaction than create/update.
 pub async fn sync_embedding_for_record(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     record: &EntityRecord,
     provider: &dyn EmbeddingProvider,
 ) -> Result<(), YorishiroError> {
-    let schema = schemas::get_by_id(conn, tenant_id, record.schema_id).await?;
+    let schema = schemas::get_by_id(conn, workspace_id, record.schema_id).await?;
     let entity_type_def = schema
         .definition
         .entity_types
@@ -116,7 +116,7 @@ pub async fn sync_embedding_for_record(
 
     sync_embedding(
         conn,
-        tenant_id,
+        workspace_id,
         record.id,
         record.updated_at,
         entity_type_def,
@@ -212,27 +212,39 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_tenant(pool: &PgPool) -> Uuid {
-        let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-            .bind("test-tenant")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        id
+    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
+        let (tenant_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
+                .bind("test-tenant")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (workspace_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("test-workspace")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (tenant_id, workspace_id)
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn writes_embedding_for_x_embed_field(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         let entity = entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -242,7 +254,7 @@ mod tests {
         .await
         .unwrap();
 
-        let schema = schemas::get_by_id(&mut conn, tenant_id, entity.schema_id)
+        let schema = schemas::get_by_id(&mut conn, workspace_id, entity.schema_id)
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types["task"];
@@ -250,7 +262,7 @@ mod tests {
 
         sync_embedding(
             &mut conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             entity.updated_at,
             entity_type_def,
@@ -263,7 +275,7 @@ mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
         let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM entities WHERE id = $1",
+            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
         )
         .bind(entity.id)
         .fetch_one(&mut *conn)
@@ -275,16 +287,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn sync_for_record_resolves_schema_and_writes_embedding(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         let entity = entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -295,14 +310,14 @@ mod tests {
         .unwrap();
 
         let provider = FakeProvider::new(768);
-        sync_embedding_for_record(&mut conn, tenant_id, &entity, &provider)
+        sync_embedding_for_record(&mut conn, workspace_id, &entity, &provider)
             .await
             .unwrap();
 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
         let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM entities WHERE id = $1",
+            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
         )
         .bind(entity.id)
         .fetch_one(&mut *conn)
@@ -314,16 +329,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn skips_embedding_when_no_x_embed_field_is_defined(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_without_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_without_embed())
             .await
             .unwrap();
 
         let entity = entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -333,7 +351,7 @@ mod tests {
         .await
         .unwrap();
 
-        let schema = schemas::get_by_id(&mut conn, tenant_id, entity.schema_id)
+        let schema = schemas::get_by_id(&mut conn, workspace_id, entity.schema_id)
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types["task"];
@@ -341,7 +359,7 @@ mod tests {
 
         sync_embedding(
             &mut conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             entity.updated_at,
             entity_type_def,
@@ -354,7 +372,7 @@ mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
 
         let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM entities WHERE id = $1",
+            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
         )
         .bind(entity.id)
         .fetch_one(&mut *conn)
@@ -415,16 +433,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn propagates_provider_errors(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         let entity = entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -434,14 +455,14 @@ mod tests {
         .await
         .unwrap();
 
-        let schema = schemas::get_by_id(&mut conn, tenant_id, entity.schema_id)
+        let schema = schemas::get_by_id(&mut conn, workspace_id, entity.schema_id)
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types["task"];
 
         let err = sync_embedding(
             &mut conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             entity.updated_at,
             entity_type_def,
@@ -456,16 +477,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn silently_succeeds_when_entity_no_longer_exists(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         let entity = entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -475,19 +499,19 @@ mod tests {
         .await
         .unwrap();
 
-        let schema = schemas::get_by_id(&mut conn, tenant_id, entity.schema_id)
+        let schema = schemas::get_by_id(&mut conn, workspace_id, entity.schema_id)
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types["task"];
 
-        entities::delete(&mut conn, tenant_id, entity.id)
+        entities::delete(&mut conn, workspace_id, entity.id)
             .await
             .unwrap();
 
         let provider = FakeProvider::new(768);
         let result = sync_embedding(
             &mut conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             entity.updated_at,
             entity_type_def,

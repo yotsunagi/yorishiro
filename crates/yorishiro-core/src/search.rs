@@ -13,6 +13,8 @@ const DEFAULT_SEARCH_LIMIT: i64 = 10;
 
 pub struct SearchQuery {
     pub entity_type: Option<String>,
+    /// JSONB containment filter (`data @> filter`), e.g. `{"status": "active"}`.
+    pub filter: Option<Value>,
     pub limit: i64,
 }
 
@@ -20,6 +22,7 @@ impl Default for SearchQuery {
     fn default() -> Self {
         Self {
             entity_type: None,
+            filter: None,
             limit: DEFAULT_SEARCH_LIMIT,
         }
     }
@@ -28,21 +31,23 @@ impl Default for SearchQuery {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SearchHit {
     pub entity: EntityRecord,
-    /// pgvector cosine distance (the `<=>` operator). Closer to 0 means more similar.
-    pub distance: f64,
+    /// pgvector cosine distance (the `<=>` operator). Closer to 0 means more similar. `None`
+    /// when the entity has no embedding and was only surfaced through the pg_trgm fuzzy
+    /// text match on `query_text`.
+    pub distance: Option<f64>,
 }
 
 #[derive(sqlx::FromRow)]
 struct SearchRow {
     id: Uuid,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     schema_id: Uuid,
     schema_version: i32,
     entity_type: String,
     data: Value,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
-    distance: f64,
+    distance: Option<f64>,
 }
 
 impl SearchRow {
@@ -50,7 +55,7 @@ impl SearchRow {
         SearchHit {
             entity: EntityRecord {
                 id: self.id,
-                tenant_id: self.tenant_id,
+                workspace_id: self.workspace_id,
                 schema_id: self.schema_id,
                 schema_version: self.schema_version,
                 entity_type: self.entity_type,
@@ -76,29 +81,36 @@ pub async fn embed_query(
 
 /// Returns entities ordered by cosine distance between the given embedding vector and the
 /// `entities.embedding` column (using the `entities_embedding_hnsw` HNSW index), closest
-/// first. Entities with no embedding (NULL) are excluded — either because their entity_type
-/// has no x-embed field, or because embedding generation hasn't run yet.
+/// first. As an auxiliary path, entities with no embedding are also included when
+/// `query_text` is a pg_trgm fuzzy match (`data::text % query_text`) against their data —
+/// this catches keyword/typo matches that vector search would miss (e.g. entity_types with
+/// no `x-embed` field, or embedding generation that hasn't run yet). Vector matches are
+/// always ranked ahead of trgm-only matches; trgm-only matches are ordered by similarity.
 pub async fn search_by_vector(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     vector: Vec<f32>,
+    query_text: &str,
     query: SearchQuery,
 ) -> Result<Vec<SearchHit>, YorishiroError> {
     let limit = query.limit.clamp(1, 200);
 
     let rows = sqlx::query_as::<_, SearchRow>(
-        "SELECT id, tenant_id, schema_id, schema_version, entity_type, data, created_at, updated_at, \
+        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, updated_at, \
                 embedding <=> $1 AS distance \
-         FROM entities \
-         WHERE tenant_id = $2 \
-           AND embedding IS NOT NULL \
+         FROM content.entities \
+         WHERE workspace_id = $2 \
            AND ($3::text IS NULL OR entity_type = $3) \
-         ORDER BY embedding <=> $1 \
-         LIMIT $4",
+           AND ($4::jsonb IS NULL OR data @> $4) \
+           AND (embedding IS NOT NULL OR data::text % $5) \
+         ORDER BY (embedding IS NULL), embedding <=> $1, similarity(data::text, $5) DESC \
+         LIMIT $6",
     )
     .bind(pgvector::Vector::from(vector))
-    .bind(tenant_id)
+    .bind(workspace_id)
     .bind(query.entity_type)
+    .bind(query.filter)
+    .bind(query_text)
     .bind(limit)
     .fetch_all(&mut *conn)
     .await
@@ -113,13 +125,13 @@ pub async fn search_by_vector(
 /// before acquiring a connection).
 pub async fn search_by_text(
     conn: &mut PgConnection,
-    tenant_id: Uuid,
+    workspace_id: Uuid,
     provider: &dyn EmbeddingProvider,
     query_text: &str,
     query: SearchQuery,
 ) -> Result<Vec<SearchHit>, YorishiroError> {
     let vector = embed_query(provider, query_text).await?;
-    search_by_vector(conn, tenant_id, vector, query).await
+    search_by_vector(conn, workspace_id, vector, query_text, query).await
 }
 
 #[cfg(test)]
@@ -188,25 +200,34 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_tenant(pool: &PgPool) -> Uuid {
-        let (id,): (Uuid,) = sqlx::query_as("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
-            .bind("test-tenant")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        id
+    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
+        let (tenant_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
+                .bind("test-tenant")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (workspace_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("test-workspace")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (tenant_id, workspace_id)
     }
 
     async fn seed_embedded_entity(
         conn: &mut PgConnection,
-        tenant_id: Uuid,
+        workspace_id: Uuid,
         entity_type: &str,
         title: &str,
         vector: Vec<f32>,
     ) -> entities::EntityRecord {
         let entity = entities::create(
             conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: entity_type.into(),
@@ -216,7 +237,7 @@ mod tests {
         .await
         .unwrap();
 
-        let schema = schemas::get_by_id(conn, tenant_id, entity.schema_id)
+        let schema = schemas::get_by_id(conn, workspace_id, entity.schema_id)
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types[entity_type];
@@ -225,7 +246,7 @@ mod tests {
 
         embedding_sync::sync_embedding(
             conn,
-            tenant_id,
+            workspace_id,
             entity.id,
             entity.updated_at,
             entity_type_def,
@@ -240,16 +261,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn returns_closest_entities_first(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         let apple = seed_embedded_entity(
             &mut conn,
-            tenant_id,
+            workspace_id,
             "task",
             "apple pie recipe",
             unit_vector(0),
@@ -257,7 +281,7 @@ mod tests {
         .await;
         let car = seed_embedded_entity(
             &mut conn,
-            tenant_id,
+            workspace_id,
             "task",
             "car engine repair",
             unit_vector(1),
@@ -267,7 +291,7 @@ mod tests {
         let query_provider = MapProvider::new([("fruit dessert", unit_vector(0))]);
         let hits = search_by_text(
             &mut conn,
-            tenant_id,
+            workspace_id,
             &query_provider,
             "fruit dessert",
             SearchQuery::default(),
@@ -283,20 +307,28 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn filters_by_entity_type(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         // project has a vector closer to the query, but we filter to entity_type=task.
-        let task =
-            seed_embedded_entity(&mut conn, tenant_id, "task", "distant task", unit_vector(5))
-                .await;
+        let task = seed_embedded_entity(
+            &mut conn,
+            workspace_id,
+            "task",
+            "distant task",
+            unit_vector(5),
+        )
+        .await;
         seed_embedded_entity(
             &mut conn,
-            tenant_id,
+            workspace_id,
             "project",
             "close project",
             unit_vector(0),
@@ -306,7 +338,7 @@ mod tests {
         let query_provider = MapProvider::new([("query", unit_vector(0))]);
         let hits = search_by_text(
             &mut conn,
-            tenant_id,
+            workspace_id,
             &query_provider,
             "query",
             SearchQuery {
@@ -323,17 +355,20 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn excludes_entities_without_an_embedding(pool: PgPool) {
-        let tenant_id = seed_tenant(&pool).await;
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
-        let mut conn = db.acquire_for_tenant(tenant_id).await.unwrap();
-        schemas::create_schema(&mut conn, tenant_id, task_schema_with_embed())
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
             .await
             .unwrap();
 
         // embedding stays NULL since sync_embedding is never called.
         entities::create(
             &mut conn,
-            tenant_id,
+            workspace_id,
             CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
@@ -346,7 +381,7 @@ mod tests {
         let query_provider = MapProvider::new([("query", unit_vector(0))]);
         let hits = search_by_text(
             &mut conn,
-            tenant_id,
+            workspace_id,
             &query_provider,
             "query",
             SearchQuery::default(),
@@ -358,12 +393,114 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    async fn surfaces_entities_without_an_embedding_via_trigram_fuzzy_match(pool: PgPool) {
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
+            .await
+            .unwrap();
+
+        // embedding stays NULL since sync_embedding is never called; only a close text
+        // match on `data` can surface this entity.
+        let entity = entities::create(
+            &mut conn,
+            workspace_id,
+            CreateEntityInput {
+                schema_name: "task-management".into(),
+                entity_type: "task".into(),
+                data: json!({ "title": "widget assembly line status" }),
+            },
+        )
+        .await
+        .unwrap();
+
+        let query_provider = MapProvider::new([("widget assembly line status", unit_vector(0))]);
+        let hits = search_by_text(
+            &mut conn,
+            workspace_id,
+            &query_provider,
+            "widget assembly line status",
+            SearchQuery::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entity.id, entity.id);
+        assert!(hits[0].distance.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn filters_by_data_field_value(pool: PgPool) {
+        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
+        let db = TenantDb::new(pool);
+        let mut conn = db
+            .acquire_for_workspace(workspace_id_tenant, workspace_id)
+            .await
+            .unwrap();
+        schemas::create_schema(&mut conn, workspace_id, task_schema_with_embed())
+            .await
+            .unwrap();
+
+        let active = seed_embedded_entity(
+            &mut conn,
+            workspace_id,
+            "task",
+            "active one",
+            unit_vector(0),
+        )
+        .await;
+        let active_entity = entities::update(
+            &mut conn,
+            workspace_id,
+            active.id,
+            json!({ "title": "active one", "status": "active" }),
+        )
+        .await
+        .unwrap();
+        let done =
+            seed_embedded_entity(&mut conn, workspace_id, "task", "done one", unit_vector(0)).await;
+        entities::update(
+            &mut conn,
+            workspace_id,
+            done.id,
+            json!({ "title": "done one", "status": "done" }),
+        )
+        .await
+        .unwrap();
+
+        let query_provider = MapProvider::new([("query", unit_vector(0))]);
+        let hits = search_by_text(
+            &mut conn,
+            workspace_id,
+            &query_provider,
+            "query",
+            SearchQuery {
+                filter: Some(json!({ "status": "active" })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entity.id, active_entity.id);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
     async fn enforces_tenant_isolation(pool: PgPool) {
-        let tenant_a = seed_tenant(&pool).await;
-        let tenant_b = seed_tenant(&pool).await;
+        let (tenant_a_tenant, tenant_a) = seed_workspace(&pool).await;
+        let (tenant_b_tenant, tenant_b) = seed_workspace(&pool).await;
         let db = TenantDb::new(pool);
 
-        let mut conn_a = db.acquire_for_tenant(tenant_a).await.unwrap();
+        let mut conn_a = db
+            .acquire_for_workspace(tenant_a_tenant, tenant_a)
+            .await
+            .unwrap();
         schemas::create_schema(&mut conn_a, tenant_a, task_schema_with_embed())
             .await
             .unwrap();
@@ -376,7 +513,10 @@ mod tests {
         )
         .await;
 
-        let mut conn_b = db.acquire_for_tenant(tenant_b).await.unwrap();
+        let mut conn_b = db
+            .acquire_for_workspace(tenant_b_tenant, tenant_b)
+            .await
+            .unwrap();
         let query_provider = MapProvider::new([("query", unit_vector(0))]);
         let hits = search_by_text(
             &mut conn_b,

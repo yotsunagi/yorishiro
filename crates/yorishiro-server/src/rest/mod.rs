@@ -1,4 +1,5 @@
 mod entities;
+mod export;
 mod relations;
 mod schemas;
 mod search;
@@ -7,8 +8,24 @@ use axum::Router;
 use axum::routing::{get, post};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
+use yorishiro_core::YorishiroError;
 
 use crate::state::AppState;
+
+/// Parses a JSON-object query parameter (e.g. `?filter={"status":"active"}`) shared by the
+/// `entities` and `search` list endpoints. `None`/empty input means "no filter".
+pub(crate) fn parse_filter_param(
+    raw: Option<String>,
+) -> Result<Option<serde_json::Value>, YorishiroError> {
+    let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw).map_err(|err| YorishiroError::ValidationFailed {
+        message: "filter is not valid JSON".into(),
+        details: vec![],
+        hint: format!("filter must be a JSON object, e.g. {{\"status\":\"active\"}}: {err}"),
+    })
+}
 
 /// Registers a single scheme named `bearer_auth` for sending the API key as a
 /// Bearer token. Individual `#[utoipa::path]` items don't carry `security(...)`;
@@ -39,6 +56,7 @@ impl Modify for SecurityAddon {
         entities::update_entity,
         entities::delete_entity,
         entities::list_entities,
+        entities::get_entity_context,
         relations::create_relation,
         relations::get_relation,
         relations::delete_relation,
@@ -48,13 +66,16 @@ impl Modify for SecurityAddon {
         schemas::get_schema_by_id,
         schemas::create_schema,
         schemas::get_entity_type_json_schema,
+        schemas::list_templates,
         search::search_entities,
+        export::export_jsonl,
     ),
     components(schemas(
         entities::CreateEntityRequest,
         entities::UpdateEntityRequest,
         relations::CreateRelationRequest,
         schemas::CreateSchemaResponse,
+        schemas::CreateSchemaRequest,
     )),
     modifiers(&SecurityAddon),
     security(("bearer_auth" = [])),
@@ -63,6 +84,7 @@ impl Modify for SecurityAddon {
         (name = "relations", description = "Relation operations"),
         (name = "schemas", description = "Meta-schema operations"),
         (name = "search", description = "Vector similarity search"),
+        (name = "export", description = "Bulk data export"),
     ),
     info(
         title = "Yorishiro API",
@@ -87,6 +109,10 @@ pub fn router() -> Router<AppState> {
                 .delete(entities::delete_entity),
         )
         .route(
+            "/api/entities/{id}/context",
+            get(entities::get_entity_context),
+        )
+        .route(
             "/api/relations",
             post(relations::create_relation).get(relations::list_relations),
         )
@@ -107,5 +133,7 @@ pub fn router() -> Router<AppState> {
             get(schemas::get_entity_type_json_schema),
         )
         .route("/api/schemas/{schema_id}", get(schemas::get_schema_by_id))
+        .route("/api/templates", get(schemas::list_templates))
         .route("/api/search", get(search::search_entities))
+        .route("/api/export.jsonl", get(export::export_jsonl))
 }
