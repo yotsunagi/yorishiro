@@ -41,11 +41,12 @@ flowchart TD
 
 ## クイックスタート
 
-必要なもの: Docker / Docker Compose。`docker compose up`で起動するのはPostgreSQLと
-開発コンテナ（`app`、Rustツールチェーン入り）で、サーバ自体は開発コンテナ内で
-`cargo run`します。
+必要なもの: Docker / Docker Compose / make。`make init`でイメージをビルドし、PostgreSQLと
+`app`（リポジトリルートのマルチステージ`Dockerfile`が生成する、本番と同じreleaseバイナリを
+実行するコンテナ）を起動します。
 
-埋め込みプロバイダの設定が起動に必須です。外部サービス不要で完結するローカルONNXの例:
+埋め込みプロバイダの設定が起動に必須です。`docker-compose.yml`は既に`app`をローカルONNX
+プロバイダに向けているので、あとはモデルを配置するだけです（外部サービス不要）:
 
 ```console
 $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
@@ -57,12 +58,7 @@ $ curl -L -o models/model.onnx \
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
 
-$ docker compose up -d --build
-$ docker compose exec \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx \
-    -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    app cargo run -p yorishiro-server
+$ make init
 ```
 
 起動時にマイグレーションが自動適用されます。詳しいセットアップ手順（起動方法、
@@ -83,11 +79,14 @@ $ docker compose exec \
 
 ## 開発
 
+日々の開発コマンドは、`app`とは別の`dev`サービス（Rustツールチェーン、`make up`では
+起動されず必要な時だけ起動）経由で実行します:
+
 ```console
-# フォーマット・lint・テスト（要: 起動中のPostgreSQL、DATABASE_URL）
-$ cargo fmt --check
-$ cargo clippy --workspace --all-targets -- -D warnings
-$ cargo test --workspace
+$ make fmt-check
+$ make clippy
+$ make test
+$ make shell   # cargo/psql/sqlx-cliへの単発アクセス
 ```
 
 `models/`にONNXモデルを置くと、実モデルでの埋め込み統合テストが有効になります

@@ -4,12 +4,13 @@
 
 ## Prerequisites and startup
 
-Prerequisites: Docker / Docker Compose. `docker compose up` starts PostgreSQL and a
-development container (`app`, with the Rust toolchain); the server itself is run with
-`cargo run` inside that container.
+Prerequisites: Docker / Docker Compose / make. `make init` builds the images and starts
+PostgreSQL plus `app`, a container running the actual release binary from the multi-stage
+`Dockerfile` at the repo root (the same image used in production).
 
-Configuring an embedding provider is required before the server will start. Here is a
-fully local example that needs no external service:
+Configuring an embedding provider is required before the server will start. `docker-compose.yml`
+already points `app` at the local ONNX provider; here's how to fetch a model for it (needs no
+external service):
 
 ```console
 $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
@@ -21,12 +22,7 @@ $ curl -L -o models/model.onnx \
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
 
-$ docker compose up -d --build
-$ docker compose exec \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx \
-    -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    app cargo run -p yorishiro-server
+$ make init
 ```
 
 Migrations are applied automatically on startup. Endpoints:
@@ -46,18 +42,17 @@ API keys are stored in the database only as SHA-256 hashes, so they must be issu
 the admin CLI (there is no way to issue one via manual SQL):
 
 ```console
-$ docker compose exec app cargo run -q -p yorishiro-server -- admin create-tenant my-team
+$ make admin ARGS="create-tenant my-team"
 tenant created
   id:   019f565d-f1e3-7afb-b876-b7003e43c230
   name: my-team
 
-$ docker compose exec app cargo run -q -p yorishiro-server -- admin create-api-key \
-    019f565d-f1e3-7afb-b876-b7003e43c230 write
+$ make admin ARGS="create-api-key 019f565d-f1e3-7afb-b876-b7003e43c230 write"
 api key created (the plaintext key is shown ONLY once — store it now)
   key:       ysr_928e48292888_ef72...
   ...
 
-$ docker compose exec app cargo run -q -p yorishiro-server -- admin list-tenants
+$ make admin ARGS="list-tenants"
 ```
 
 The plaintext key is shown only once, at issuance time. Admin commands access the database

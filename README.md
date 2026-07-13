@@ -44,12 +44,13 @@ flowchart TD
 
 ## Quick start
 
-Prerequisites: Docker / Docker Compose. `docker compose up` starts PostgreSQL and a
-development container (`app`, with the Rust toolchain); the server itself is run with
-`cargo run` inside that container.
+Prerequisites: Docker / Docker Compose / make. `make init` builds the images and starts
+PostgreSQL plus `app`, a container running the actual release binary from the multi-stage
+`Dockerfile` at the repo root (the same image used in production).
 
-An embedding provider must be configured for the server to start. Here's a fully local
-example using ONNX that needs no external service:
+An embedding provider must be configured for the server to start. `docker-compose.yml`
+already points `app` at the local ONNX provider; here's how to fetch a model for it (needs
+no external service):
 
 ```console
 $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
@@ -61,12 +62,7 @@ $ curl -L -o models/model.onnx \
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
 
-$ docker compose up -d --build
-$ docker compose exec \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx \
-    -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    app cargo run -p yorishiro-server
+$ make init
 ```
 
 Migrations are applied automatically on startup. See [docs/setup.md](docs/setup.md) for
@@ -86,11 +82,14 @@ the full setup guide, endpoint list, tenant/API key provisioning, and auth model
 
 ## Development
 
+Day-to-day development commands run through a separate `dev` service (Rust toolchain,
+started on demand rather than as part of `make up`):
+
 ```console
-# Format, lint, test (requires a running PostgreSQL and DATABASE_URL)
-$ cargo fmt --check
-$ cargo clippy --workspace --all-targets -- -D warnings
-$ cargo test --workspace
+$ make fmt-check
+$ make clippy
+$ make test
+$ make shell   # ad-hoc cargo/psql/sqlx-cli access
 ```
 
 Placing an ONNX model under `models/` enables embedding integration tests against the real
