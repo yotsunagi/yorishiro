@@ -26,6 +26,9 @@ services:
       DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
       YSR_BIND: 0.0.0.0:8080
       RUST_LOG: info
+      YSR_EMBEDDING_PROVIDER: local
+      YSR_ONNX_MODEL_PATH: models/model.onnx
+      YSR_ONNX_TOKENIZER_PATH: models/tokenizer.json
     ports:
       - "8080:8080"
     depends_on:
