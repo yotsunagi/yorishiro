@@ -2,16 +2,18 @@ use crate::error::{ValidationDetail, YorishiroError};
 
 use super::types::{FieldTypeName, MetaSchemaDefinition};
 
-/// RFC6901に従い、JSON Pointerのセグメントとして埋め込む前に`~`/`/`をエスケープする。
+/// Escapes `~`/`/` per RFC6901 before embedding a value as a JSON Pointer segment.
 fn escape_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-/// §3.4: メタスキーマ自体の検証。
-/// - entity_types / relation_types に最低限の整合性があること
-/// - relation_types の source/target は同一definition内のentity_typesキーに存在すること
-/// - array型フィールドはitems.type == "string"のみ（MVP制約、§3.3）
-/// - format はstring型のみ、minimum/maximumはnumber/integer型のみ許可し、minimum<=maximumを要求する
+/// Validates the metaschema definition itself:
+/// - entity_types / relation_types must have minimal internal consistency
+/// - relation_types' source/target must reference keys existing in this
+///   definition's entity_types
+/// - array-type fields only allow items.type == "string" (MVP constraint)
+/// - format is only valid for string fields; minimum/maximum are only valid
+///   for number/integer fields and require minimum <= maximum
 pub fn validate_definition(def: &MetaSchemaDefinition) -> Result<(), YorishiroError> {
     let mut details = Vec::new();
 
@@ -125,7 +127,7 @@ pub fn validate_definition(def: &MetaSchemaDefinition) -> Result<(), YorishiroEr
         Err(YorishiroError::ValidationFailed {
             message: format!("metaschema definition '{}' is invalid", def.name),
             details,
-            hint: "entity_types / relation_types の整合性を確認してください".into(),
+            hint: "Check the consistency between entity_types and relation_types".into(),
         })
     }
 }

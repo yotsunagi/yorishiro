@@ -7,18 +7,18 @@ use crate::error::YorishiroError;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 埋め込みベクトルを生成するプロバイダ（§10）。
-/// `entities.embedding`列は`vector(768)`固定のため、実際にテナントへ配線する実装は
-/// `dimensions()`が768を返すことを呼び出し側（configロード時）で検証すること。
+/// Provider that generates embedding vectors.
+/// The `entities.embedding` column is fixed at `vector(768)`, so an implementation
+/// actually wired to a tenant must have its caller verify (at config load time)
+/// that `dimensions()` returns 768.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
-    /// このプロバイダが生成するベクトルの次元数。
     fn dimensions(&self) -> usize;
 
-    /// 複数テキストを一括で埋め込む。入力と同じ順序・同じ件数のベクトルを返すこと。
+    /// Must return vectors in the same order and count as the input.
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, YorishiroError>;
 
-    /// 単一テキストの埋め込み。デフォルト実装は`embed_batch`に委譲する。
+    /// Default implementation delegates to `embed_batch`.
     async fn embed(&self, text: &str) -> Result<Vec<f32>, YorishiroError> {
         let batch = self.embed_batch(&[text]).await?;
         batch.into_iter().next().ok_or_else(|| {
@@ -29,15 +29,15 @@ pub trait EmbeddingProvider: Send + Sync {
     }
 }
 
-/// OpenAI互換のembeddings APIを呼び出す設定。
 pub struct OpenAiCompatibleConfig {
-    /// 例: `https://api.openai.com/v1`（末尾の`/`は有無どちらでもよい）。
+    /// Example: `https://api.openai.com/v1` (a trailing `/` is optional).
     pub base_url: String,
     pub api_key: String,
     pub model: String,
     pub dimensions: usize,
-    /// vLLM/Ollama等、`dimensions`パラメータを認識しないOpenAI互換実装もあるため、
-    /// リクエストに含めるかどうかを明示的に選べるようにする。
+    /// Some OpenAI-compatible implementations (vLLM, Ollama, etc.) don't
+    /// recognize the `dimensions` parameter, so callers can explicitly choose
+    /// whether to include it in the request.
     pub send_dimensions_param: bool,
 }
 
@@ -205,7 +205,8 @@ mod tests {
     #[tokio::test]
     async fn empty_batch_short_circuits_without_a_request() {
         let server = MockServer::start().await;
-        // expect(0)により、実際にリクエストが飛べばサーバーのドロップ時にpanicして検出される。
+        // `expect(0)` means an actual request would panic when the mock server
+        // is dropped, catching a regression here.
         Mock::given(method("POST"))
             .and(path("/embeddings"))
             .respond_with(ResponseTemplate::new(200))

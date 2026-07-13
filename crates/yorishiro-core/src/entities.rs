@@ -9,8 +9,8 @@ use crate::error::{ValidationDetail, YorishiroError};
 use crate::metaschema;
 use crate::schemas;
 
-/// `entities`テーブルの1行。`embedding`はFR-4（検索/埋め込みパイプライン）が別途管理するため、
-/// このモジュールのCRUDでは扱わない。
+/// A row in the `entities` table. `embedding` is managed separately by the
+/// search/embedding pipeline, so this module's CRUD doesn't touch it.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct EntityRecord {
     pub id: Uuid,
@@ -48,14 +48,14 @@ impl Default for ListEntitiesQuery {
     }
 }
 
-/// RFC6901に従い、JSON Pointerのセグメントとして埋め込む前に`~`/`/`をエスケープする。
+/// Escapes `~`/`/` per RFC 6901 before embedding a value as a JSON Pointer segment.
 fn escape_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-/// バリデーションエラーの発生箇所をJSON Pointerとして表現する。
-/// `required`違反は`instance_path()`だけだとオブジェクト自体のパスにしかならず
-/// どのプロパティが欠けているか分からないため、欠落プロパティ名を末尾に付加する。
+/// Represents where a validation error occurred as a JSON Pointer. For `required`
+/// violations, `instance_path()` alone only points at the containing object and doesn't
+/// say which property is missing, so the missing property name is appended.
 fn error_field_pointer(err: &jsonschema::ValidationError<'_>) -> String {
     let base = err.instance_path().to_string();
     if let jsonschema::error::ValidationErrorKind::Required { property } = err.kind()
@@ -67,8 +67,9 @@ fn error_field_pointer(err: &jsonschema::ValidationError<'_>) -> String {
     }
 }
 
-/// entity_typeの定義から生成したJSON Schemaに対して`data`を検証する。
-/// §9投影仕様のスキーマをそのまま使い、entities/MCP inputSchemaで検証ロジックを重複させない。
+/// Validates `data` against the JSON Schema generated from the entity_type definition.
+/// Reuses `entity_type_to_json_schema`'s schema as-is so validation logic isn't duplicated
+/// between entities and the MCP inputSchema.
 fn validate_data(
     entity_type_def: &metaschema::EntityTypeDef,
     data: &Value,
@@ -91,7 +92,7 @@ fn validate_data(
         Err(YorishiroError::ValidationFailed {
             message: "entity data does not conform to its schema".into(),
             details,
-            hint: "entity_typeのフィールド定義とdataを確認してください".into(),
+            hint: "Check the entity_type field definitions against the submitted data".into(),
         })
     }
 }
@@ -111,8 +112,8 @@ fn resolve_entity_type<'a>(
         })
 }
 
-/// 新規entityを作成する。スキーマ名から現在activeなスキーマを解決し、そのバージョンに
-/// entity_typeが存在するかとdataの妥当性を検証したうえで永続化する。
+/// Creates a new entity: resolves the schema name to its currently active schema, checks
+/// that the entity_type exists in that version, validates `data`, and persists the result.
 pub async fn create(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -156,9 +157,10 @@ pub async fn get(
     })
 }
 
-/// 既存entityの`data`を全置換する。検証は、entityが実際に作成された時点のスキーマバージョン
-/// （＝entities.schema_idが指す行）に対して行う。activeバージョンが進んでいても、
-/// 既存entityの互換性を勝手に壊さないため。
+/// Fully replaces an existing entity's `data`. Validation is done against the schema
+/// version the entity was actually created with (i.e. the row `entities.schema_id` points
+/// to), so existing entities don't silently break compatibility even if the active version
+/// has since moved on.
 pub async fn update(
     conn: &mut PgConnection,
     tenant_id: Uuid,

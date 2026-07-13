@@ -10,9 +10,10 @@ use utoipa::{Modify, OpenApi};
 
 use crate::state::AppState;
 
-/// APIキーをBearerトークンとして送る単一のスキームを`bearer_auth`という名前で登録する。
-/// 個々の`#[utoipa::path]`には`security(...)`を付けず、ここでの登録とApiDoc側の
-/// トップレベル`security`属性によって全エンドポイントへ一括適用する。
+/// Registers a single scheme named `bearer_auth` for sending the API key as a
+/// Bearer token. Individual `#[utoipa::path]` items don't carry `security(...)`;
+/// this registration plus `ApiDoc`'s top-level `security` attribute apply it to
+/// every endpoint at once.
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -58,20 +59,21 @@ impl Modify for SecurityAddon {
     modifiers(&SecurityAddon),
     security(("bearer_auth" = [])),
     tags(
-        (name = "entities", description = "エンティティ（FR-2）"),
-        (name = "relations", description = "リレーション（FR-3）"),
-        (name = "schemas", description = "メタスキーマ（FR-1）"),
-        (name = "search", description = "ベクトル類似検索（FR-4）"),
+        (name = "entities", description = "Entity operations"),
+        (name = "relations", description = "Relation operations"),
+        (name = "schemas", description = "Meta-schema operations"),
+        (name = "search", description = "Vector similarity search"),
     ),
     info(
-        title = "Yorishiro（依り代）API",
-        description = "ユーザー定義スキーマ・MCPネイティブなナレッジストアのREST API",
+        title = "Yorishiro API",
+        description = "REST API for a user-defined-schema, MCP-native knowledge store",
     ),
 )]
 pub struct ApiDoc;
 
-/// REST APIのルーティング。`state`を渡さず`Router<AppState>`のまま返すことで、
-/// `main.rs`側でMCPルートやSwaggerUiと合流させたうえで最後に`with_state`できるようにする。
+/// REST API routing. Returned as `Router<AppState>` without state applied, so
+/// that `main.rs` can merge in the MCP routes and SwaggerUi before calling
+/// `with_state` at the end.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(

@@ -34,12 +34,12 @@ pub struct ListRelationsParams {
     path = "/api/relations",
     request_body = CreateRelationRequest,
     responses(
-        (status = 201, description = "リレーションを作成した", body = RelationRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "source/targetまたはrelation_typeが存在しない", body = crate::error::ApiErrorBody),
-        (status = 409, description = "同一のリレーションが既に存在する", body = crate::error::ApiErrorBody),
-        (status = 422, description = "relation_typeがsource/targetのentity_typeと矛盾する", body = crate::error::ApiErrorBody),
+        (status = 201, description = "Relation created", body = RelationRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The source, target, or relation_type does not exist", body = crate::error::ApiErrorBody),
+        (status = 409, description = "An identical relation already exists", body = crate::error::ApiErrorBody),
+        (status = 422, description = "relation_type conflicts with the entity_type of source/target", body = crate::error::ApiErrorBody),
     ),
     tag = "relations",
 )]
@@ -61,12 +61,12 @@ pub async fn create_relation(
 #[utoipa::path(
     get,
     path = "/api/relations/{id}",
-    params(("id" = Uuid, Path, description = "リレーションID")),
+    params(("id" = Uuid, Path, description = "Relation ID")),
     responses(
-        (status = 200, description = "リレーションを取得した", body = RelationRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "リレーションが存在しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Relation retrieved", body = RelationRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Relation not found", body = crate::error::ApiErrorBody),
     ),
     tag = "relations",
 )]
@@ -82,12 +82,12 @@ pub async fn get_relation(
 #[utoipa::path(
     delete,
     path = "/api/relations/{id}",
-    params(("id" = Uuid, Path, description = "リレーションID")),
+    params(("id" = Uuid, Path, description = "Relation ID")),
     responses(
-        (status = 204, description = "リレーションを削除した"),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "リレーションが存在しない", body = crate::error::ApiErrorBody),
+        (status = 204, description = "Relation deleted"),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Relation not found", body = crate::error::ApiErrorBody),
     ),
     tag = "relations",
 )]
@@ -105,9 +105,9 @@ pub async fn delete_relation(
     path = "/api/relations",
     params(ListRelationsParams),
     responses(
-        (status = 200, description = "リレーションを一覧取得した", body = Vec<RelationRecord>),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 200, description = "List of relations retrieved", body = Vec<RelationRecord>),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
     ),
     tag = "relations",
 )]

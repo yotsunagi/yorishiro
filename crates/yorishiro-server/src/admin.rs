@@ -3,10 +3,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use yorishiro_core::auth::{self, ApiKeyScope, CreatedApiKey};
 
-/// 管理サブコマンドの入口。サーバ起動（引数なし）とは異なり、DATABASE_URLの
-/// 接続ロール（マイグレーションを実行できる管理ロール）で直接DBを操作する。
-/// APIキーはDBにSHA-256ハッシュでしか保存されないため、キー発行はSQLの手作業では
-/// 行えず、このCLIが唯一のブートストラップ手段になる。
+/// Entry point for the admin subcommands. Unlike a plain server start (no args), this
+/// operates on the database directly using the DATABASE_URL connection role (the admin
+/// role that can run migrations). API keys are stored only as SHA-256 hashes, so issuing
+/// one can't be done by hand in SQL — this CLI is the only bootstrap mechanism.
 pub async fn run(args: &[String]) -> Result<()> {
     let usage = "usage:\n  \
         yorishiro-server admin create-tenant <name>\n  \
@@ -28,8 +28,8 @@ pub async fn run(args: &[String]) -> Result<()> {
     let pool = PgPool::connect(&database_url)
         .await
         .context("failed to connect to database")?;
-    // 初回セットアップ（サーバをまだ一度も起動していないDB）でも動くよう、
-    // サーバ起動時と同じマイグレーションを適用しておく（適用済みならno-op）。
+    // Apply the same migrations the server runs on startup so this also works against a
+    // fresh database that has never been started (a no-op if already applied).
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
     match rest {
@@ -130,7 +130,7 @@ async fn create_api_key(
     tenant_id: Uuid,
     scope: ApiKeyScope,
 ) -> Result<CreatedApiKey> {
-    // 先にテナントの存在を確かめ、FK違反より分かりやすいエラーにする。
+    // Check the tenant exists up front so the error is clearer than a raw FK violation.
     let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE id = $1")
         .bind(tenant_id)
         .fetch_optional(pool)
@@ -174,7 +174,8 @@ async fn list_api_keys(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ApiKeySumma
     Ok(rows)
 }
 
-/// キー行を削除する。認証はリクエストごとにDBを引くため、削除は即座に失効を意味する。
+/// Authentication looks up the key in the database on every request, so deleting the row
+/// revokes it immediately.
 async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<()> {
     let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
         .bind(key_id)
@@ -192,9 +193,9 @@ struct ResyncReport {
     failed: usize,
 }
 
-/// embedding列がNULLのentityを列挙してembedding同期をやり直す。バックグラウンド同期の
-/// 失敗（embedding APIの一時障害、デプロイ時のプロセス停止など）で検索から漏れた
-/// entityを回復するための運用コマンド。
+/// Re-syncs embeddings for entities whose `embedding` column is still NULL. An operational
+/// recovery command for entities that fell out of search due to a failed background sync
+/// (e.g. a transient embedding API outage or a process killed mid-deploy).
 async fn resync_embeddings(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -249,7 +250,7 @@ mod tests {
         assert_eq!(created.tenant_id, tenant_id);
         assert!(created.plaintext.starts_with("ysr_"));
 
-        // 発行されたキーが実際に認証を通ることまで確かめる。
+        // Confirm the issued key actually authenticates, not just that creation returned Ok.
         let ctx = auth::authenticate(&pool, &created.plaintext).await.unwrap();
         assert_eq!(ctx.tenant_id, tenant_id);
         assert_eq!(ctx.scope, ApiKeyScope::Write);
@@ -323,8 +324,8 @@ mod tests {
         yorishiro_core::schemas::create_schema(&mut conn, tenant_id, definition)
             .await
             .unwrap();
-        // coreのcreateはembeddingを書かない（アダプタのバックグラウンド同期の担当）ため、
-        // このentityは「同期に失敗して取り残されたentity」を再現している。
+        // core's create doesn't write the embedding (that's the adapter's background sync
+        // job), so this entity reproduces one left behind by a failed sync.
         let entity = yorishiro_core::entities::create(
             &mut conn,
             tenant_id,

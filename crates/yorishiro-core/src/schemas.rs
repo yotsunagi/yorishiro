@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::error::YorishiroError;
 use crate::metaschema::{self, MetaSchemaDefinition, VersioningDiff, validate_definition};
 
-/// `schemas`テーブルの1行を表す。`definition`はDB上ではJSONBだが、
-/// アプリ層では常にパース済みの`MetaSchemaDefinition`として扱う。
+/// Represents a row in the `schemas` table. `definition` is JSONB in the DB, but the
+/// application layer always treats it as a parsed `MetaSchemaDefinition`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SchemaRecord {
     pub id: Uuid,
@@ -48,9 +48,9 @@ impl SchemaRow {
     }
 }
 
-/// スキーマ一覧の1行。`definition`本体を含まない軽量なサマリで、
-/// MCPクライアント（LLM）が「このテナントにどんなスキーマがあるか」を
-/// 発見するための入口として使う。
+/// A row in a schema listing. A lightweight summary that omits the `definition` body,
+/// used as the entry point for MCP clients (LLMs) to discover what schemas exist for a
+/// tenant.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct SchemaSummary {
     pub id: Uuid,
@@ -60,7 +60,8 @@ pub struct SchemaSummary {
     pub created_at: DateTime<Utc>,
 }
 
-/// テナントの全スキーマ（全バージョン、archived含む）をname・version順で列挙する。
+/// Lists all of a tenant's schemas (every version, including archived) ordered by name
+/// and version.
 pub async fn list(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -75,7 +76,8 @@ pub async fn list(
     .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
-/// 指定テナント・名前の現在有効なスキーマ（status='active'のうち最新version）を取得する。
+/// Fetches the currently active schema (the latest version with status='active') for
+/// the given tenant and name.
 pub async fn get_active_schema(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -100,7 +102,8 @@ pub async fn get_active_schema(
     }
 }
 
-/// idを指定してスキーマの特定バージョンを取得する（entityが参照しているバージョンの解決に使う）。
+/// Fetches a specific schema version by id (used to resolve the version an entity
+/// references).
 pub async fn get_by_id(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -124,17 +127,15 @@ pub async fn get_by_id(
     }
 }
 
-/// 新しいスキーマ定義を登録する。
-/// - 同名の既存スキーマが無ければ version=1, status='active' で新規作成する。
-/// - 既にあれば §2.4 のversioning::diffを計算し、破壊的変更かどうかをreasonsとして返しつつ、
-///   常に新バージョンとして追加登録する（旧activeはarchivedにする）。
-///   スキーマ自体の妥当性はvalidate_definitionで事前に検証する。
+/// Registers a new schema definition, after validating it with `validate_definition`. If no
+/// schema of this name exists yet, creates version 1 as active; otherwise computes a
+/// a `versioning::diff`, archives the previous active version, and always inserts
+/// the new definition as the next version (reporting whether the diff is breaking).
 ///
-/// 同一(tenant_id, name)に対する同時作成はアドバイザリロックで直列化する。
-/// これが無いと「現在のactiveバージョンを読む」→「archived更新+新バージョンINSERT」の
-/// 間にTOCTOUウィンドウが生じ、並行呼び出しがUNIQUE(tenant_id, name, version)違反で
-/// 中途半端に失敗したり、片方が他方のコミット済みactiveバージョンを誤ってarchivedに
-/// してしまいうる。
+/// Concurrent creates for the same (tenant_id, name) are serialized with an advisory lock:
+/// without it, reading the active version and then archiving-it-plus-inserting the new one
+/// would race, letting concurrent calls fail on the UNIQUE(tenant_id, name, version)
+/// constraint or archive a version another call just committed as active.
 pub async fn create_schema(
     conn: &mut PgConnection,
     tenant_id: Uuid,

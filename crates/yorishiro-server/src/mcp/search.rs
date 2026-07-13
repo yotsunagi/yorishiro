@@ -15,18 +15,19 @@ use super::{ScopeOutcome, YorishiroMcpServer, authorize_scope_only, err_to_tool_
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchEntitiesArgs {
-    /// 検索したい自然文のクエリ。embeddingプロバイダでベクトル化し、
-    /// `x-embed`フィールドのベクトルとのコサイン距離で近いエンティティを返す。
+    /// Natural-language query text. Vectorized via the embedding provider and
+    /// matched against entities' `x-embed` field by cosine distance.
     pub query_text: String,
-    /// 指定した場合、このentity_typeのエンティティのみを検索対象にする。
     pub entity_type: Option<String>,
-    /// 返す件数の上限（省略時は10）。
+    /// Upper bound on the number of results returned (defaults to 10 if omitted).
     pub limit: Option<i64>,
 }
 
 #[tool_router(vis = "pub(crate)", router = tool_router_search)]
 impl YorishiroMcpServer {
-    #[tool(description = "自然文クエリでエンティティをベクトル類似検索する（read scope必須）")]
+    #[tool(
+        description = "Vector similarity search over entities using a natural-language query (requires read scope)"
+    )]
     pub async fn search_entities(
         &self,
         Parameters(args): Parameters<SearchEntitiesArgs>,
@@ -43,8 +44,9 @@ impl YorishiroMcpServer {
             limit: args.limit.unwrap_or(default.limit),
         };
 
-        // 埋め込み生成はDBコネクション取得より先に行う（RESTアダプタと同じ理由:
-        // LocalOnnxプロバイダの直列化待ちの間、プール接続を占有しない）。
+        // Embedding generation happens before acquiring a DB connection, for the
+        // same reason as the REST adapter: don't hold a pool connection while
+        // waiting on the LocalOnnx provider's serialized inference.
         let vector =
             match search::embed_query(self.state.embedding_provider.as_ref(), &args.query_text)
                 .await

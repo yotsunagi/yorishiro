@@ -12,8 +12,7 @@ use yorishiro_core::db::TenantDb;
 
 use crate::error::ApiError;
 
-/// `Authorization: Bearer <key>`ヘッダから素のAPIキー文字列を取り出す。
-/// `AuthContext`/`Authorized<R>`の両extractorで共有する。
+/// Shared by both the `AuthContext` and `Authorized<R>` extractors.
 fn extract_bearer_key(parts: &Parts) -> Result<&str, ApiError> {
     parts
         .headers
@@ -23,9 +22,10 @@ fn extract_bearer_key(parts: &Parts) -> Result<&str, ApiError> {
         .ok_or(ApiError(YorishiroError::Unauthenticated))
 }
 
-/// 認証済みリクエストの唯一の入口。ハンドラの引数にこの型を要求すること自体が
-/// 「このルートは認証必須」という表明になり、認証チェックの付け忘れを
-/// コンパイル時に防ぐ（`Extension<T>`を素で使うと付け忘れても黙って通ってしまう）。
+/// The sole entry point for authenticated requests. Requiring this type as a handler
+/// argument is itself a declaration that "this route requires authentication," which
+/// prevents forgetting the auth check at compile time (a bare `Extension<T>` would
+/// silently work even if the check were skipped).
 pub struct AuthContext(pub auth::AuthContext);
 
 impl<S> FromRequestParts<S> for AuthContext
@@ -41,8 +41,8 @@ where
         let db = TenantDb::from_ref(state);
         let ctx = auth::authenticate(db.pool(), presented_key).await?;
 
-        // last_used_atの更新は認証結果には影響しないベストエフォート処理。
-        // 失敗してもリクエストは継続させる。
+        // Updating last_used_at is best-effort and doesn't affect the auth result;
+        // the request proceeds even if it fails.
         match db.acquire_for_tenant(ctx.tenant_id).await {
             Ok(mut conn) => {
                 if let Err(err) =
@@ -60,8 +60,8 @@ where
     }
 }
 
-/// エンドポイントが要求するAPIキーscopeを型として宣言するためのマーカー。
-/// `Authorized<R>`の型パラメータに使う。
+/// Marker for declaring an endpoint's required API key scope at the type level.
+/// Used as the type parameter of `Authorized<R>`.
 pub trait RequiredScope {
     const SCOPE: ApiKeyScope;
 }
@@ -81,12 +81,12 @@ impl RequiredScope for SchemaScope {
     const SCOPE: ApiKeyScope = ApiKeyScope::Schema;
 }
 
-/// 認証・要求scopeの検証・RLSコンテキスト設定済みコネクションの取得を一括で行う
-/// extractor。`R`（`ReadScope`/`WriteScope`/`SchemaScope`）がそのままハンドラの
-/// シグネチャ上でscope要件の宣言になる。MCPアダプタの`Authorized`と同じく、この型を
-/// 経由しない限り`&mut PgConnection`を得る手段がない構造にすることで、スコープ
-/// チェックの呼び忘れを構造的に防ぐ（コアロジックは`yorishiro_core::auth::authorize`
-/// として両アダプタで共有している）。
+/// An extractor that authenticates, verifies the required scope, and acquires a connection
+/// with the RLS context already set, all in one step. `R` (`ReadScope`/`WriteScope`/
+/// `SchemaScope`) doubles as the scope requirement declared in the handler signature. As
+/// with the MCP adapter's `Authorized`, there is no way to obtain a `&mut PgConnection`
+/// except through this type, which structurally prevents forgetting the scope check (the
+/// core logic lives in `yorishiro_core::auth::authorize`, shared by both adapters).
 pub struct Authorized<R> {
     pub ctx: auth::AuthContext,
     conn: PoolConnection<sqlx::Postgres>,
@@ -121,11 +121,11 @@ where
     }
 }
 
-/// `Authorized<R>`のコネクション非保持版。認証と`R`のscope検証だけを行い、
-/// DBコネクションは取得しない。埋め込み生成のような時間のかかる処理を挟んでから
-/// DBへアクセスするハンドラ（検索）では、`Authorized<R>`を使うと埋め込み生成中も
-/// プール接続を占有してしまうため、こちらを使って処理後に自前で
-/// `TenantDb::acquire_for_tenant`すること。
+/// A connection-less version of `Authorized<R>`: it only authenticates and verifies `R`'s
+/// scope, without acquiring a DB connection. Handlers that do slow work (e.g. generating an
+/// embedding) before touching the database — search, for instance — would otherwise hold a
+/// pool connection idle through `Authorized<R>`; use this instead and call
+/// `TenantDb::acquire_for_tenant` afterward.
 pub struct Verified<R> {
     pub ctx: auth::AuthContext,
     _scope: PhantomData<R>,

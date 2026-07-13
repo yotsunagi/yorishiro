@@ -10,15 +10,16 @@ use yorishiro_core::embedding::EmbeddingProvider;
 use yorishiro_core::embedding_sync;
 use yorishiro_core::entities::EntityRecord;
 
-/// バックグラウンドembedding同期の同時実行数上限。同期タスクはembedding API呼び出し
-/// （最大数十秒）の間プール接続を1本占有するため、無制限にspawnすると書き込みバースト時に
-/// リクエスト処理用の接続（プール全体で20本）が枯渇する。上限を超えた分は破棄されるのでは
-/// なくsemaphore上で接続を持たずに待機する。
+/// Cap on concurrent background embedding syncs. Each sync task holds a pool connection for
+/// the duration of the embedding API call (up to tens of seconds), so spawning without limit
+/// would exhaust the connections needed for request handling (20 total in the pool) during a
+/// write burst. Tasks beyond the cap aren't dropped — they wait on the semaphore without
+/// holding a connection.
 const EMBEDDING_SYNC_MAX_CONCURRENCY: usize = 4;
 
-/// REST/MCP双方のハンドラが共有するアプリケーション状態。
-/// `TenantDb`単体ではなくこの構造体をaxumのStateにすることで、
-/// 検索系ハンドラが`EmbeddingProvider`にもアクセスできるようにする。
+/// Application state shared by both the REST and MCP handlers. Using this struct as axum's
+/// `State` — rather than `TenantDb` alone — lets search handlers also reach the
+/// `EmbeddingProvider`.
 #[derive(Clone)]
 pub struct AppState {
     pub tenant_db: TenantDb,
@@ -37,18 +38,18 @@ impl AppState {
         }
     }
 
-    /// graceful shutdown時に未完了のembedding同期を待つためのトラッカー。
-    /// `main`がHTTPサーバ停止後に`close()`+`wait()`する。
+    /// Tracker used to wait for in-flight embedding syncs during graceful shutdown.
+    /// `main` calls `close()` + `wait()` on it after the HTTP server stops.
     pub fn embedding_tasks(&self) -> &TaskTracker {
         &self.embedding_tasks
     }
 
-    /// entityのcreate/update成功後にembedding列の同期をバックグラウンドで行う。
-    /// embedding API呼び出しは最大数十秒かかりうるため、リクエストの応答は待たせず、
-    /// リクエストが使っていたコネクションとも切り離して新しくプールから取得する
-    /// （`sync_embedding`のdocコメントにある同一トランザクション禁止の制約を満たす）。
-    /// 失敗はログに残すのみ: embeddingは補助機能であり、entity本体の書き込み成否に
-    /// 影響させない。
+    /// Syncs the `embedding` column in the background after an entity create/update
+    /// succeeds. The embedding API call can take up to tens of seconds, so the request isn't
+    /// made to wait for it, and a fresh connection is acquired from the pool instead of
+    /// reusing the request's own connection (satisfying the no-same-transaction constraint
+    /// documented on `sync_embedding`). Failures are only logged: embedding is an auxiliary
+    /// feature and must not affect whether the entity write itself succeeds.
     pub fn spawn_embedding_sync(
         &self,
         tenant_id: Uuid,
@@ -57,14 +58,14 @@ impl AppState {
         let db = self.tenant_db.clone();
         let provider = Arc::clone(&self.embedding_provider);
         let permits = Arc::clone(&self.embedding_sync_permits);
-        // TaskTracker経由でspawnすることで、graceful shutdown時に書き込み済みentityの
-        // embedding同期が完走するのを待てる（SIGTERM即終了だと同期が失われ、
-        // そのentityは検索から漏れ続ける）。
+        // Spawning through the TaskTracker lets graceful shutdown wait for the embedding
+        // sync of an already-written entity to finish (an immediate SIGTERM exit would lose
+        // the sync, leaving that entity permanently missing from search).
         self.embedding_tasks.spawn(async move {
-            // permitを取ってからコネクションを取得する順序が重要:
-            // 逆にすると待機中のタスク全員が接続を抱え込み、制限の意味がなくなる。
+            // The order matters: acquire the permit before the connection. Reversing it
+            // would let every waiting task hold a connection, defeating the point of the cap.
             let Ok(_permit) = permits.acquire_owned().await else {
-                // Semaphoreはcloseしない運用なので到達しない。
+                // Unreachable in practice: the semaphore is never closed.
                 return;
             };
 

@@ -9,7 +9,6 @@ use crate::entities;
 use crate::error::YorishiroError;
 use crate::schemas;
 
-/// `relations`テーブルの1行。
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct RelationRecord {
     pub id: Uuid,
@@ -51,10 +50,11 @@ impl Default for ListRelationsQuery {
     }
 }
 
-/// relation_typeがsource/targetのentity_typeと矛盾していないかを検証する。
-/// メタスキーマ上の定義は、sourceエンティティが実際に作成された時点のスキーマ
-/// （entities.schema_idが指す行）に対して解決する。entities::updateと同じく、
-/// 有効なスキーマが進んでいても既存entity同士の関係を勝手に壊さないため。
+/// Validates that relation_type doesn't conflict with the source/target entity_types.
+/// The metaschema definition is resolved against the schema the source entity was actually
+/// created with (the row `entities.schema_id` points to) — as with `entities::update`, so
+/// existing relationships between entities don't silently break even as the active schema
+/// evolves.
 async fn validate_relation_type(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -88,8 +88,8 @@ async fn validate_relation_type(
     Ok(())
 }
 
-/// 新規relationを作成する。source/target双方のentityが存在し、relation_typeが
-/// メタスキーマ上のsource/target制約と一致することを検証したうえで永続化する。
+/// Creates a new relation: verifies both the source and target entities exist and that
+/// relation_type matches the metaschema's source/target constraint, then persists it.
 pub async fn create(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -124,9 +124,9 @@ pub async fn create(
                 input.relation_type, input.source_id, input.target_id
             ),
         },
-        // source/targetの存在確認とINSERTの間に、別トランザクションから当該entityが
-        // 削除されるTOCTOUウィンドウがある。FK違反はそのレースの顕在化であり、
-        // 事前チェックと同じくNotFoundとして扱う。
+        // There's a TOCTOU window between checking source/target existence and the INSERT,
+        // during which another transaction could delete the entity. An FK violation is that
+        // race surfacing, so it's treated as NotFound just like the upfront check.
         Some(db_err) if db_err.is_foreign_key_violation() => YorishiroError::NotFound {
             message: format!(
                 "source '{}' or target '{}' no longer exists",
@@ -496,7 +496,7 @@ mod tests {
         let result = get(&mut conn_b, tenant_b, relation.id).await;
         assert!(matches!(result, Err(YorishiroError::NotFound { .. })));
 
-        // tenant_bからはtenant_aのentityも見えないため、source/targetの存在確認自体がNotFoundになる。
+        // tenant_b can't see tenant_a's entities either, so the source/target existence check itself reports NotFound.
         let cross_tenant_err = create(
             &mut conn_b,
             tenant_b,

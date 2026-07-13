@@ -15,7 +15,7 @@ use yorishiro_core::auth::{self, ApiKeyScope, AuthContext};
 
 use crate::state::AppState;
 
-/// 各ドメインの`#[tool_router]`実装から合成される、Yorishiro MCPサーバー本体。
+/// Yorishiro MCP server, assembled from each domain's `#[tool_router]` implementation.
 #[derive(Clone)]
 pub struct YorishiroMcpServer {
     state: AppState,
@@ -38,15 +38,16 @@ impl YorishiroMcpServer {
 impl ServerHandler for YorishiroMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Yorishiro（依り代）はユーザー定義スキーマ・マルチテナントのナレッジストアです。\
-             各ツール呼び出しは`Authorization: Bearer <api-key>`ヘッダーによる認証が必須で、\
-             APIキーのscope（read/write/schema、上位が下位を包含）に応じて呼び出せるツールが制限されます。",
+            "Yorishiro is a multi-tenant knowledge store with user-defined schemas. \
+             Every tool call requires authentication via an `Authorization: Bearer <api-key>` \
+             header, and the tools available depend on the API key's scope \
+             (read/write/schema, where higher scopes include the permissions of lower ones).",
         )
     }
 }
 
-/// 認証・スコープ検証を通過した呼び出しが手にする、RLSコンテキスト設定済みの
-/// コネクションと認証情報。
+/// Auth context plus a connection with RLS already configured, held by calls
+/// that passed authentication and scope checks.
 pub(super) struct Authorized {
     pub(super) ctx: AuthContext,
     conn: PoolConnection<sqlx::Postgres>,
@@ -58,11 +59,10 @@ impl Authorized {
     }
 }
 
-/// 認証・スコープ不足のいずれでもない失敗をこの型が表す機会はない
-/// （どちらも呼び出し側でハンドリングされる）ため、`authorize`の戻り値は
-/// 「プロトコルレベルの失敗（`Err`）」と「スコープ不足という業務結果（`Ok`のバリアント）」
-/// の2つに分ける。前者はAPIキー欠落・無効というエージェント側の再試行が無意味な
-/// 失敗、後者はエージェントが状況を理解して行動を変えられる情報だからである。
+/// `authorize` splits its outcome into two kinds rather than a single failure case:
+/// a protocol-level failure (`Err`) and a scope-insufficient business outcome
+/// (`Ok` variant). The former is a dead end an agent can't usefully retry
+/// (missing/invalid API key); the latter is information an agent can act on.
 pub(super) enum AuthzOutcome {
     Authorized(Authorized),
     ScopeDenied(CallToolResult),
@@ -79,12 +79,12 @@ fn extract_bearer_key(parts: &Parts) -> Result<&str, ErrorData> {
         })
 }
 
-/// 全ツールハンドラの唯一の入口。この関数を経由しない限り`&mut PgConnection`を
-/// 得る手段がない構造にすることで、スコープチェックの呼び忘れを構造的に防ぐ。
-/// 認証・認可のコアロジック自体は`yorishiro_core::auth::authorize`にREST側と
-/// 共有されており、ここではその結果をMCPプロトコルの2種類の失敗表現
-/// （プロトコルレベルの`ErrorData` / tool結果レベルの`CallToolResult`）へ
-/// 振り分けるだけにする。
+/// The sole entry point for every tool handler. Because there is no other way to
+/// obtain a `&mut PgConnection`, forgetting the scope check is structurally
+/// impossible. The actual auth/authz logic is shared with the REST adapter via
+/// `yorishiro_core::auth::authorize`; this just routes its result into the MCP
+/// protocol's two failure shapes (`ErrorData` at the protocol level,
+/// `CallToolResult` at the tool-result level).
 pub(super) async fn authorize(
     state: &AppState,
     parts: &Parts,
@@ -104,16 +104,16 @@ pub(super) async fn authorize(
     }
 }
 
-/// `authorize`のコネクション非保持版の結果。`AuthzOutcome`と同じ2分法だが、
-/// 成功時にコネクションを含まない。
+/// The connection-less counterpart to `authorize`'s result. Same two-way split as
+/// `AuthzOutcome`, but the success variant carries no connection.
 pub(super) enum ScopeOutcome {
     Verified(AuthContext),
     ScopeDenied(CallToolResult),
 }
 
-/// `authorize`のコネクション非保持版。埋め込み生成のような時間のかかる処理を挟む
-/// ツール（検索）で、その間プール接続を占有しないために使う。処理後のDBアクセスは
-/// `state.tenant_db.acquire_for_tenant`で自前取得すること。
+/// Connection-less version of `authorize`, for tools (search) that run a slow step
+/// such as embedding generation in between, so the pool connection isn't held idle
+/// during it. Acquire a connection afterward via `state.tenant_db.acquire_for_tenant`.
 pub(super) async fn authorize_scope_only(
     state: &AppState,
     parts: &Parts,
@@ -133,9 +133,9 @@ pub(super) async fn authorize_scope_only(
     }
 }
 
-/// ビジネスロジックのエラーをtool呼び出し結果（`is_error: true`）へ変換する。
-/// `Internal`は詳細をログへ残し、クライアントには汎用メッセージのみ返す
-/// （RESTアダプタの`ApiError`と同じ方針）。
+/// Converts a business-logic error into a tool call result (`is_error: true`).
+/// `Internal` errors are logged with detail but only a generic message reaches
+/// the client, matching the REST adapter's `ApiError` policy.
 pub(super) fn err_to_tool_result(err: YorishiroError) -> CallToolResult {
     match err {
         YorishiroError::Internal(err) => {

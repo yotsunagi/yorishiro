@@ -18,9 +18,9 @@ use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_
 pub struct CreateRelationArgs {
     pub source_id: Uuid,
     pub target_id: Uuid,
-    /// スキーマの`relation_types`定義で宣言されたrelation_type名。
+    /// relation_type name declared in the schema's `relation_types` definition.
     pub relation_type: String,
-    /// リレーションに付随する任意のプロパティ（JSONオブジェクト、省略時は空オブジェクト）。
+    /// Arbitrary properties attached to the relation (JSON object, defaults to an empty object if omitted).
     pub properties: Option<Value>,
 }
 
@@ -39,17 +39,17 @@ pub struct ListRelationsArgs {
     pub source_id: Option<Uuid>,
     pub target_id: Option<Uuid>,
     pub relation_type: Option<String>,
-    /// 最大件数（省略時は50）。
+    /// Maximum number of results (defaults to 50 if omitted).
     pub limit: Option<i64>,
-    /// スキップする件数（省略時は0）。
+    /// Number of records to skip (defaults to 0 if omitted).
     pub offset: Option<i64>,
 }
 
 #[tool_router(vis = "pub(crate)", router = tool_router_relations)]
 impl YorishiroMcpServer {
     #[tool(
-        description = "2つのエンティティ間にリレーションを作成する（write scope必須）。\
-                           updateは提供されないため、変更する場合は削除して作り直すこと。"
+        description = "Create a relation between two entities (requires write scope). \
+                           No update operation is provided; to change a relation, delete it and recreate it."
     )]
     pub async fn create_relation(
         &self,
@@ -75,7 +75,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "IDを指定してリレーションを1件取得する（read scope必須）")]
+    #[tool(description = "Get a single relation by ID (requires read scope)")]
     pub async fn get_relation(
         &self,
         Parameters(args): Parameters<GetRelationArgs>,
@@ -93,7 +93,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "リレーションを削除する（write scope必須）")]
+    #[tool(description = "Delete a relation (requires write scope)")]
     pub async fn delete_relation(
         &self,
         Parameters(args): Parameters<DeleteRelationArgs>,
@@ -111,7 +111,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "リレーションを一覧取得する（read scope必須）")]
+    #[tool(description = "List relations (requires read scope)")]
     pub async fn list_relations(
         &self,
         Parameters(args): Parameters<ListRelationsArgs>,

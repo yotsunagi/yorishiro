@@ -21,9 +21,9 @@ pub struct CreateSchemaResponse {
     get,
     path = "/api/schemas",
     responses(
-        (status = 200, description = "テナントの全スキーマ（全バージョン、archived含む）のサマリ一覧", body = Vec<SchemaSummary>),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Summary list of all schemas for the tenant (all versions, including archived)", body = Vec<SchemaSummary>),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
     ),
     tag = "schemas",
 )]
@@ -38,12 +38,12 @@ pub async fn list_schemas(
 #[utoipa::path(
     get,
     path = "/api/schemas/active/{name}",
-    params(("name" = String, Path, description = "スキーマ名")),
+    params(("name" = String, Path, description = "Schema name")),
     responses(
-        (status = 200, description = "現在アクティブなスキーマ定義を取得した", body = SchemaRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "指定した名前のアクティブなスキーマが存在しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Currently active schema definition retrieved", body = SchemaRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "No active schema exists with the given name", body = crate::error::ApiErrorBody),
     ),
     tag = "schemas",
 )]
@@ -59,12 +59,12 @@ pub async fn get_active_schema(
 #[utoipa::path(
     get,
     path = "/api/schemas/{schema_id}",
-    params(("schema_id" = Uuid, Path, description = "スキーマID（特定バージョン）")),
+    params(("schema_id" = Uuid, Path, description = "Schema ID (specific version)")),
     responses(
-        (status = 200, description = "指定バージョンのスキーマ定義を取得した", body = SchemaRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "指定したスキーマが存在しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Schema definition for the specified version retrieved", body = SchemaRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The specified schema does not exist", body = crate::error::ApiErrorBody),
     ),
     tag = "schemas",
 )]
@@ -82,11 +82,11 @@ pub async fn get_schema_by_id(
     path = "/api/schemas",
     request_body = MetaSchemaDefinition,
     responses(
-        (status = 201, description = "スキーマを新規登録、または新バージョンとして追加した", body = CreateSchemaResponse),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 409, description = "同時作成によるバージョン競合", body = crate::error::ApiErrorBody),
-        (status = 422, description = "スキーマ定義自体が不正", body = crate::error::ApiErrorBody),
+        (status = 201, description = "Schema newly registered, or added as a new version", body = CreateSchemaResponse),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 409, description = "Version conflict due to concurrent creation", body = crate::error::ApiErrorBody),
+        (status = 422, description = "The schema definition itself is invalid", body = crate::error::ApiErrorBody),
     ),
     tag = "schemas",
 )]
@@ -106,14 +106,14 @@ pub async fn create_schema(
     get,
     path = "/api/schemas/active/{name}/entity-types/{entity_type}/json-schema",
     params(
-        ("name" = String, Path, description = "アクティブなスキーマの名前"),
-        ("entity_type" = String, Path, description = "スキーマ内のentity_type名"),
+        ("name" = String, Path, description = "Name of the active schema"),
+        ("entity_type" = String, Path, description = "Name of the entity_type within the schema"),
     ),
     responses(
-        (status = 200, description = "entity_typeをJSON Schemaとして投影した結果", body = Value),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "指定したスキーマ/entity_typeが存在しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Result of projecting the entity_type as a JSON Schema", body = Value),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The specified schema or entity_type does not exist", body = crate::error::ApiErrorBody),
     ),
     tag = "schemas",
 )]

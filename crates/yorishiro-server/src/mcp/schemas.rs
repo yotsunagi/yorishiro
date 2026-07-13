@@ -28,24 +28,25 @@ pub struct GetSchemaByIdArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateSchemaArgs {
-    /// `MetaSchemaDefinition`（name/description/entity_types/relation_types）に
-    /// 従うJSONオブジェクト。同名のスキーマが既に存在する場合は非破壊/破壊的変更を
-    /// 自動判定した上で新バージョンとして登録される。
+    /// JSON object conforming to `MetaSchemaDefinition`
+    /// (name/description/entity_types/relation_types). If a schema with the same
+    /// name already exists, whether the change is breaking or non-breaking is
+    /// detected automatically and it is registered as a new version.
     pub definition: Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetEntityTypeJsonSchemaArgs {
-    /// アクティブなスキーマの名前。
+    /// Name of the active schema.
     pub schema_name: String,
-    /// そのスキーマ内のentity_type名。
+    /// entity_type name within that schema.
     pub entity_type: String,
 }
 
 #[tool_router(vis = "pub(crate)", router = tool_router_schemas)]
 impl YorishiroMcpServer {
     #[tool(
-        description = "テナントに登録済みの全スキーマ（全バージョン、archived含む）のサマリを一覧する。どんなスキーマがあるかの発見に使う（read scope必須）"
+        description = "List summaries of all schemas registered for the tenant (all versions, including archived). Use this to discover what schemas exist (requires read scope)"
     )]
     pub async fn list_schemas(
         &self,
@@ -63,7 +64,9 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "名前を指定して現在アクティブなスキーマ定義を取得する（read scope必須）")]
+    #[tool(
+        description = "Get the currently active schema definition by name (requires read scope)"
+    )]
     pub async fn get_active_schema(
         &self,
         Parameters(args): Parameters<GetActiveSchemaArgs>,
@@ -81,7 +84,9 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "IDを指定して特定バージョンのスキーマ定義を取得する（read scope必須）")]
+    #[tool(
+        description = "Get a specific version of a schema definition by ID (requires read scope)"
+    )]
     pub async fn get_schema_by_id(
         &self,
         Parameters(args): Parameters<GetSchemaByIdArgs>,
@@ -100,8 +105,8 @@ impl YorishiroMcpServer {
     }
 
     #[tool(
-        description = "新しいスキーマを登録する、または既存スキーマの新バージョンを追加する\
-                           （schema scope必須）"
+        description = "Register a new schema, or add a new version to an existing schema \
+                           (requires schema scope)"
     )]
     pub async fn create_schema(
         &self,
@@ -119,10 +124,9 @@ impl YorishiroMcpServer {
                 return Ok(err_to_tool_result(YorishiroError::ValidationFailed {
                     message: format!("invalid schema definition: {err}"),
                     details: vec![],
-                    hint:
-                        "MetaSchemaDefinitionの構造（name/description/entity_types/relation_types）\
-                           を確認してください"
-                            .into(),
+                    hint: "Check the structure of MetaSchemaDefinition \
+                           (name/description/entity_types/relation_types)"
+                        .into(),
                 }));
             }
         };
@@ -138,9 +142,9 @@ impl YorishiroMcpServer {
     }
 
     #[tool(
-        description = "アクティブなスキーマ内の特定entity_typeを、JSON Schemaとして取得する\
-                           （read scope必須）。フィールドの型・必須・enum等をエージェントが\
-                           事前に把握するために使う。"
+        description = "Get a specific entity_type within the active schema as a JSON Schema \
+                           (requires read scope). Use this to let an agent learn field types, \
+                           required fields, enums, etc. ahead of time."
     )]
     pub async fn get_entity_type_json_schema(
         &self,

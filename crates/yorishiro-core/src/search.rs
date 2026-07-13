@@ -28,7 +28,7 @@ impl Default for SearchQuery {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SearchHit {
     pub entity: EntityRecord,
-    /// pgvectorのコサイン距離（`<=>`演算子）。0に近いほど類似している。
+    /// pgvector cosine distance (the `<=>` operator). Closer to 0 means more similar.
     pub distance: f64,
 }
 
@@ -63,10 +63,10 @@ impl SearchRow {
     }
 }
 
-/// クエリテキストを埋め込みベクトルへ変換する。`search_by_vector`と組にして使う。
-/// リクエスト経路ではDBコネクションを取得する前にこちらを先に呼ぶこと:
-/// 埋め込み生成は外部API呼び出しやローカル推論の直列化待ちで長時間かかりうるため、
-/// コネクションを保持したまま待つとプール枯渇が無関係なエンドポイントへ波及する。
+/// Converts query text into an embedding vector; used together with `search_by_vector`. On
+/// request paths, call this before acquiring a DB connection: embedding generation can take
+/// a long time (external API calls or waiting on serialized local inference), and holding a
+/// connection while waiting would let pool exhaustion spill over onto unrelated endpoints.
 pub async fn embed_query(
     provider: &dyn EmbeddingProvider,
     query_text: &str,
@@ -74,10 +74,10 @@ pub async fn embed_query(
     provider.embed(query_text).await
 }
 
-/// 埋め込み済みのクエリベクトルで、`entities.embedding`列に対するコサイン距離
-/// （HNSWインデックス`entities_embedding_hnsw`利用）で近い順にentityを返す。
-/// embeddingが未設定（NULL）のentityは対象外（x-embedフィールドを持たない
-/// entity_typeや、embedding生成がまだ行われていないentity）。
+/// Returns entities ordered by cosine distance between the given embedding vector and the
+/// `entities.embedding` column (using the `entities_embedding_hnsw` HNSW index), closest
+/// first. Entities with no embedding (NULL) are excluded — either because their entity_type
+/// has no x-embed field, or because embedding generation hasn't run yet.
 pub async fn search_by_vector(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -107,9 +107,10 @@ pub async fn search_by_vector(
     Ok(rows.into_iter().map(SearchRow::into_hit).collect())
 }
 
-/// `embed_query` + `search_by_vector`の合成。埋め込み生成中も`conn`を保持し続けるため、
-/// リクエスト経路では使わず、コネクション保持が問題にならないテスト・バッチ用途に限ること
-/// （リクエスト経路のハンドラはコネクション取得前に`embed_query`を呼ぶ）。
+/// Composes `embed_query` + `search_by_vector`. Because this holds `conn` for the duration
+/// of embedding generation, don't use it on request paths — reserve it for tests and batch
+/// jobs where holding a connection isn't a problem (request handlers call `embed_query`
+/// before acquiring a connection).
 pub async fn search_by_text(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -143,8 +144,8 @@ mod tests {
         v
     }
 
-    /// テキスト→ベクトルの対応関係をテストごとに明示的に決められるフェイクプロバイダ。
-    /// 未登録のテキストが渡されたらpanicし、テストの前提崩れを即座に検出する。
+    /// A fake provider that lets each test explicitly fix the text→vector mapping. Panics
+    /// if given unregistered text, catching broken test assumptions immediately.
     struct MapProvider {
         vectors: HashMap<String, Vec<f32>>,
     }
@@ -219,8 +220,7 @@ mod tests {
             .await
             .unwrap();
         let entity_type_def = &schema.definition.entity_types[entity_type];
-        // compose_embedding_textは"field: value"形式でテキストを合成するため、
-        // フィクスチャのキーもそれに合わせる。
+        // compose_embedding_text builds text in "field: value" form, so the fixture key matches that format.
         let provider = MapProvider::new([(format!("title: {title}"), vector)]);
 
         embedding_sync::sync_embedding(
@@ -290,7 +290,7 @@ mod tests {
             .await
             .unwrap();
 
-        // projectのほうがクエリに近いベクトルを持つが、entity_typeでtaskに絞る。
+        // project has a vector closer to the query, but we filter to entity_type=task.
         let task =
             seed_embedded_entity(&mut conn, tenant_id, "task", "distant task", unit_vector(5))
                 .await;
@@ -330,7 +330,7 @@ mod tests {
             .await
             .unwrap();
 
-        // sync_embeddingを呼ばないため、embeddingはNULLのまま。
+        // embedding stays NULL since sync_embedding is never called.
         entities::create(
             &mut conn,
             tenant_id,

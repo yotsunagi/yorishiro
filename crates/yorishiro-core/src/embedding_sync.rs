@@ -9,10 +9,11 @@ use crate::error::YorishiroError;
 use crate::metaschema::EntityTypeDef;
 use crate::schemas;
 
-/// `x-embed`が付いたフィールドの値を`"field: value"`の形式で連結し、埋め込み対象テキストを
-/// 合成する。フィールド名を残すのは、値だけを裸で並べるより埋め込みモデルにとって
-/// 意味的な文脈が保たれるため。対象フィールドが無い、またはいずれも値を持たない場合は
-/// `None`を返し、呼び出し側でembedding API呼び出し自体をスキップできるようにする。
+/// Concatenates the values of `x-embed` fields as `"field: value"` to build the
+/// text to embed. Field names are kept because bare values would lose semantic
+/// context that helps the embedding model, compared to concatenating raw
+/// values alone. Returns `None` when there are no such fields or all are
+/// absent, so callers can skip the embedding API call entirely.
 fn compose_embedding_text(entity_type_def: &EntityTypeDef, data: &Value) -> Option<String> {
     let parts: Vec<String> = entity_type_def
         .fields
@@ -32,16 +33,18 @@ fn compose_embedding_text(entity_type_def: &EntityTypeDef, data: &Value) -> Opti
     }
 }
 
-/// entityの`x-embed`フィールドから埋め込みベクトルを生成し、`entities.embedding`列を更新する。
-/// `x-embed`対象フィールドがスキーマに無い、または値が無い場合は何もせず`Ok(())`を返す
-/// （embeddingは補助的な機能であり、entity自体の永続化を妨げてはならないため）。
+/// Generates an embedding vector from an entity's `x-embed` fields and updates
+/// the `entities.embedding` column. Returns `Ok(())` without doing anything if
+/// the schema has no `x-embed` fields or none have values (embedding is an
+/// auxiliary feature and must never block persisting the entity itself).
 ///
-/// 呼び出し側への注意点:
-/// - `entities::create`/`entities::update`の両方の後で呼ぶこと。dataが変わるどちらの
-///   経路でもembeddingの再生成が必要。
-/// - `entities::create`/`update`と同一トランザクションでは呼ばないこと。内部でHTTP経由の
-///   embedding API呼び出し（最大30秒）を行うため、同一トランザクション内で呼ぶとその間
-///   DB接続・行ロックを保持し続け、コネクションプール枯渇やロック競合を招く。
+/// Notes for callers:
+/// - Call this after both `entities::create` and `entities::update`; either
+///   path changes `data` and requires regenerating the embedding.
+/// - Do not call this within the same transaction as `entities::create`/`update`.
+///   It performs an embedding API call over HTTP (up to 30s), and holding a DB
+///   connection and row locks for that long risks connection pool exhaustion
+///   and lock contention.
 pub async fn sync_embedding(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -57,10 +60,11 @@ pub async fn sync_embedding(
 
     let vector = provider.embed(&text).await?;
 
-    // `updated_at`の一致を書き込み条件に含めることで、同一entityへのupdateが連続した際に
-    // embedding API呼び出しの所要時間差で完了順が入れ替わっても、古いdataから計算した
-    // ベクトルが新しいものを上書きしないようにする（embedding書き込み自体はupdated_atを
-    // 変更しないため、この条件が後続の正当な同期を妨げることはない）。
+    // Including the `updated_at` match as a write condition prevents a vector
+    // computed from stale data from overwriting a newer one when consecutive
+    // updates to the same entity complete out of order due to differing
+    // embedding API latencies (writing the embedding itself doesn't change
+    // `updated_at`, so this condition never blocks a subsequent legitimate sync).
     let result = sqlx::query(
         "UPDATE entities SET embedding = $1 \
          WHERE tenant_id = $2 AND id = $3 AND updated_at = $4",
@@ -83,13 +87,15 @@ pub async fn sync_embedding(
     Ok(())
 }
 
-/// `entities::create`/`update`の戻り値（`EntityRecord`）だけを頼りに、embedding同期に
-/// 必要なスキーマ定義を自前で解決して`sync_embedding`を呼ぶ。record内のdataは
-/// そのentityが検証されたスキーマバージョン（`record.schema_id`）に属するため、
-/// activeバージョンではなくIDでの取得が正しい。
+/// Resolves the schema definition needed for embedding sync on its own,
+/// relying only on the return value of `entities::create`/`update`
+/// (`EntityRecord`), then calls `sync_embedding`. The record's data belongs to
+/// the schema version it was validated against (`record.schema_id`), so
+/// fetching by ID rather than the active version is correct.
 ///
-/// アダプタ層がレスポンス返却後のバックグラウンドタスクから呼ぶことを想定した入口で、
-/// `sync_embedding`と同じくcreate/updateとは別コネクション・別トランザクションで呼ぶこと。
+/// This is the intended entry point for adapter layers to call from a
+/// background task after returning a response; like `sync_embedding`, call it
+/// from a separate connection/transaction than create/update.
 pub async fn sync_embedding_for_record(
     conn: &mut PgConnection,
     tenant_id: Uuid,

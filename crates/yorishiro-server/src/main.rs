@@ -28,8 +28,8 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 引数付き起動は管理CLI（`yorishiro-server admin ...`）。人間が読む出力なので
-    // JSON形式のtracing初期化より前に分岐する。
+    // A start with args is the admin CLI (`yorishiro-server admin ...`), which prints for a
+    // human, so branch to it before initializing JSON-formatted tracing.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         return admin::run(&args).await;
@@ -43,10 +43,10 @@ async fn main() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let bind_addr = std::env::var("YSR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
 
-    // マイグレーションはCREATE ROLE/GRANT/ALTER TABLE等の管理者権限を要するため、
-    // `SET ROLE`でRLS実効ロールへ切り替わる前の一時的な管理プールで実行する。
-    // 実行後は破棄し、以降のリクエスト処理は必ず`tenant_db`（yorishiro_appロール）
-    // 経由で行う。
+    // Migrations need admin privileges (CREATE ROLE/GRANT/ALTER TABLE, etc.), so they run on
+    // a throwaway admin pool, before switching to the RLS-enforced role via `SET ROLE`. It's
+    // dropped afterward; all request handling from here on goes through `tenant_db` (the
+    // yorishiro_app role).
     {
         let admin_pool = sqlx::PgPool::connect(&database_url).await?;
         sqlx::migrate!("../../migrations").run(&admin_pool).await?;
@@ -64,10 +64,10 @@ async fn main() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // HTTPを閉じた後、書き込み済みentityのembedding同期が完走するのを待つ。
-    // ここで待たずに即終了すると、直前に作成されたentityが検索から漏れ続ける
-    // （`admin resync-embeddings`での回復は可能だが、日常のデプロイで
-    // 発生させないのが第一）。
+    // After closing HTTP, wait for the embedding sync of already-written entities to finish.
+    // Exiting immediately without waiting would leave recently created entities permanently
+    // missing from search (recoverable via `admin resync-embeddings`, but the goal is to
+    // avoid needing that on routine deploys).
     embedding_tasks.close();
     if tokio::time::timeout(std::time::Duration::from_secs(30), embedding_tasks.wait())
         .await
@@ -82,8 +82,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// SIGTERM（コンテナオーケストレータの標準的な停止シグナル）とCtrl-Cの両方で
-/// graceful shutdownを開始する。
+/// Starts a graceful shutdown on either SIGTERM (the standard stop signal from container
+/// orchestrators) or Ctrl-C.
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -105,10 +105,11 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received, draining connections");
 }
 
-/// 環境変数からembeddingsプロバイダを構築する。`YSR_EMBEDDING_PROVIDER`で
-/// `openai`（OpenAI互換API、デフォルト）と`local`（ローカルONNXモデル）を切り替える。
-/// `entities.embedding`列は`vector(768)`固定のため、次元数が一致しない設定は
-/// 起動時に弾く（localの場合はさらにプローブ推論でモデルの実出力次元も検証される）。
+/// Builds the embeddings provider from environment variables. `YSR_EMBEDDING_PROVIDER`
+/// switches between `openai` (OpenAI-compatible API, the default) and `local` (a local ONNX
+/// model). The `entities.embedding` column is fixed at `vector(768)`, so a mismatched
+/// dimension count is rejected at startup (for `local`, a probe inference further verifies
+/// the model's actual output dimension).
 fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
     let dimensions: usize = std::env::var("YSR_EMBEDDING_DIMENSIONS")
         .unwrap_or_else(|_| "768".into())
@@ -157,8 +158,9 @@ fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
     }
 }
 
-/// ルーティング構成そのものは`main`と統合テストの双方から同一の形で使う必要が
-/// あるため、`AppState`を渡すだけでアプリを組み立てられる関数として切り出す。
+/// The routing configuration itself needs to be identical between `main` and the
+/// integration tests, so it's factored into a function that builds the app from just an
+/// `AppState`.
 fn build_app(state: AppState) -> Router {
     let cors = build_cors_layer();
     let mcp_service = StreamableHttpService::new(
@@ -216,8 +218,8 @@ mod tests {
 
     use super::*;
 
-    /// テストではリモートembeddingsサービスを呼びたくないため、次元数だけを
-    /// 満たすダミープロバイダを使う（呼び出されれば即エラーにする）。
+    /// Tests shouldn't call out to a remote embeddings service, so this dummy provider only
+    /// satisfies the dimension count (and errors immediately if actually invoked).
     struct UnreachableEmbeddingProvider;
 
     #[async_trait]
@@ -237,8 +239,9 @@ mod tests {
         AppState::new(TenantDb::new(pool), Arc::new(UnreachableEmbeddingProvider))
     }
 
-    /// embedding配線のend-to-endテスト用に、決定的なベクトルを返すプロバイダ。
-    /// 全テキストが同一ベクトルになるため、クエリとentityの距離は常に0＝必ずヒットする。
+    /// A provider that returns a deterministic vector, for end-to-end tests of the embedding
+    /// wiring. Every text maps to the same vector, so the distance between query and entity
+    /// is always 0 — guaranteeing a hit.
     struct FixedEmbeddingProvider;
 
     #[async_trait]
@@ -329,9 +332,9 @@ mod tests {
         assert_eq!(json["scope"], "write");
     }
 
-    /// `text/event-stream`のボディから`data: {...}`行を抽出し、JSONとしてパースする。
-    /// streamable-httpは複数イベントを`\n\n`区切りで返すが、単発リクエストへの
-    /// 応答は末尾のイベントに載っているため、それを対象にする。
+    /// Extracts the `data: {...}` line from a `text/event-stream` body and parses it as JSON.
+    /// streamable-http returns multiple events separated by `\n\n`, but the response to a
+    /// single request is carried in the last one, so that's the one targeted.
     fn parse_sse_json(body: &str) -> serde_json::Value {
         body.split("\n\n")
             .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
@@ -366,8 +369,8 @@ mod tests {
             .unwrap()
     }
 
-    /// initialize + notifications/initialized のハンドシェイクを行い、
-    /// 以降のtools/call呼び出しで使うセッションIDを返す。
+    /// Performs the initialize + notifications/initialized handshake and returns the
+    /// session ID to use for subsequent tools/call requests.
     async fn mcp_handshake(app: &Router) -> String {
         let response = mcp_post(
             app,
@@ -448,9 +451,10 @@ mod tests {
         );
     }
 
-    /// 各ツールの必須引数を型だけ満たすダミー値で埋める。認可チェックは
-    /// 引数デシリアライズの後に走るため、このテストの目的（認可漏れの検出）
-    /// を成立させるには引数自体を有効な形にしておく必要がある。
+    /// Fills each tool's required arguments with dummy values that only satisfy their types.
+    /// The authorization check runs after argument deserialization, so for this test's goal
+    /// (catching missing authorization checks) to hold, the arguments themselves must
+    /// already be well-formed.
     fn dummy_arguments_for_tool(name: &str) -> serde_json::Value {
         const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
         match name {
@@ -479,9 +483,9 @@ mod tests {
         }
     }
 
-    /// 個別のツールでの確認漏れが将来紛れ込まないよう、`tools/list`で列挙した
-    /// 全ツールに対して機械的に「Authorizationヘッダーが無ければ一律に
-    /// プロトコルエラーになる」ことを検証する。
+    /// Mechanically verifies, for every tool enumerated by `tools/list`, that a missing
+    /// Authorization header always produces a protocol error — so that an oversight in one
+    /// tool's checks can't slip in unnoticed in the future.
     #[sqlx::test(migrations = "../../migrations")]
     async fn every_registered_tool_requires_an_authorization_header(pool: PgPool) {
         let app = build_app(test_state(pool));
@@ -671,9 +675,9 @@ mod tests {
             "bearer"
         );
 
-        // pathsのresponses/request_bodyが参照する全$refがcomponents.schemasに
-        // 実在することを確認する（utoipaの`paths(...)`列挙による自動収集が
-        // 期待通り機能しているかの回帰テスト）。
+        // Verify every $ref referenced by paths' responses/request_body actually exists
+        // under components.schemas (a regression test for utoipa's `paths(...)` listing
+        // correctly auto-collecting schemas).
         let schemas = json["components"]["schemas"].as_object().unwrap();
         let json_str = json.to_string();
         let dangling: Vec<&str> = json_str
@@ -834,9 +838,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    /// entity作成→バックグラウンドembedding同期→ベクトル検索ヒット、という
-    /// FR-4の本番経路全体をREST経由で検証する。embedding同期はfire-and-forgetの
-    /// バックグラウンドタスクなので、検索がヒットするまで短い間隔でポーリングする。
+    /// Verifies the full production path over REST: entity creation, background
+    /// embedding sync, then a vector search hit. The embedding sync is a fire-and-forget
+    /// background task, so this polls at short intervals until the search hits.
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_created_entity_becomes_searchable(pool: PgPool) {
         let tenant_id = seed_tenant(&pool).await;
@@ -972,7 +976,7 @@ mod tests {
         let created = rest_json_body(response).await;
         let entity_id = created["id"].as_str().unwrap().to_string();
 
-        // テナントBのキーではテナントAのエンティティは存在しないものとして404になる。
+        // Tenant B's key sees tenant A's entity as if it doesn't exist, hence 404.
         let response = rest_request(
             &app,
             "GET",
@@ -983,15 +987,12 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        // 一覧取得もテナントBからは空になる。
         let response = rest_request(&app, "GET", "/api/entities", Some(&read_auth_b), None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let listed = rest_json_body(response).await;
         assert_eq!(listed.as_array().unwrap().len(), 0);
     }
 
-    /// relations向けのフィクスチャ: task/projectの2 entity_typeとbelongs_to relation_typeを
-    /// 持つスキーマを登録し、task/projectのエンティティを1件ずつ作って両IDを返す。
     async fn seed_task_and_project(
         app: &Router,
         schema_auth: &str,
@@ -1092,7 +1093,7 @@ mod tests {
         let relation_id = created["id"].as_str().unwrap().to_string();
         assert_eq!(created["relation_type"], "belongs_to");
 
-        // 同一のリレーションの重複作成は409。
+        // Creating the same relation again is a conflict, 409.
         let response = rest_request(
             &app,
             "POST",
@@ -1103,7 +1104,8 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
-        // relation_typeのsource/targetと矛盾する向き（project→task）は422。
+        // A direction that contradicts the relation_type's declared source/target
+        // (project→task) is 422.
         let response = rest_request(
             &app,
             "POST",
@@ -1180,7 +1182,7 @@ mod tests {
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
-        // スキーマ登録はschema scope必須: write scopeキーでは403。
+        // Registering a schema requires schema scope: a write-scope key gets 403.
         let definition_v1 = serde_json::json!({
             "name": "task-management",
             "entity_types": {
@@ -1233,7 +1235,6 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        // entity_typeのJSON Schema投影。requiredにtitleが含まれる。
         let response = rest_request(
             &app,
             "GET",
@@ -1252,7 +1253,8 @@ mod tests {
                 .contains(&serde_json::json!("title"))
         );
 
-        // 必須フィールド追加を含むv2は破壊的変更としてdiffに報告され、activeが切り替わる。
+        // v2, which adds a required field, is reported in the diff as a breaking change,
+        // and active switches to it.
         let response = rest_request(
             &app,
             "POST",
@@ -1287,7 +1289,6 @@ mod tests {
         let active = rest_json_body(response).await;
         assert_eq!(active["version"], 2);
 
-        // 一覧にはarchivedになったv1とactiveなv2の両方が載る。
         let response = rest_request(&app, "GET", "/api/schemas", Some(&write_auth), None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let listed = rest_json_body(response).await;

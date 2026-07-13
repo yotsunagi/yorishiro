@@ -21,14 +21,16 @@ pub struct SearchEntitiesParams {
     path = "/api/search",
     params(SearchEntitiesParams),
     responses(
-        (status = 200, description = "自然文クエリによるベクトル類似検索の結果", body = Vec<SearchHit>),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Vector similarity search results for a natural-language query", body = Vec<SearchHit>),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
     ),
     tag = "search",
 )]
 pub async fn search_entities(
     State(state): State<AppState>,
+    // `Verified`, not `Authorized`: no connection is acquired here, since one
+    // isn't needed until after the slow embedding call below.
     verified: Verified<ReadScope>,
     Query(params): Query<SearchEntitiesParams>,
 ) -> Result<Json<Vec<SearchHit>>, ApiError> {
@@ -38,9 +40,10 @@ pub async fn search_entities(
         limit: params.limit.unwrap_or(default.limit),
     };
 
-    // 埋め込み生成はDBコネクション取得より先に行う。LocalOnnxプロバイダでは推論が
-    // プロセス内で直列化されるため、コネクションを握ったまま待つとプール枯渇が
-    // 検索以外のエンドポイントにも波及する。
+    // Embedding generation happens before acquiring a DB connection. The
+    // LocalOnnx provider serializes inference within the process, so holding a
+    // connection while waiting would let pool exhaustion spill over to other
+    // endpoints too.
     let vector = search::embed_query(state.embedding_provider.as_ref(), &params.query_text).await?;
 
     let tenant_id = verified.ctx.tenant_id;

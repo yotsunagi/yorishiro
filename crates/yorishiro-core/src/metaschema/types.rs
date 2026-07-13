@@ -44,8 +44,9 @@ pub struct ArrayItems {
     pub r#type: String,
 }
 
-/// フィールド定義。技術仕様§3.3のMVP型（string/number/integer/boolean/array）を表現する。
-/// 未知の`x-`属性は`extra`にflattenで保持し、前方互換を維持する（§3.3）。
+/// Field definition, restricted to the MVP types (string/number/integer/boolean/array).
+/// Unknown `x-` attributes are preserved via `extra` (flattened) so that older clients
+/// don't drop fields they don't recognize yet.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FieldDef {
     pub r#type: FieldTypeName,

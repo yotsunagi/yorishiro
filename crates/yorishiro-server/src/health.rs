@@ -7,10 +7,10 @@ use serde::Serialize;
 
 use crate::state::AppState;
 
-/// DB疎通確認に割り当てる上限時間。オーケストレータ（k8s等）のヘルスチェック
-/// タイムアウト（通常数秒）より十分短くし、DBが応答不能な場合でも
-/// `/health`自体がハングしてオーケストレータ側のタイムアウトに引っかかるより先に
-/// 503を返せるようにする。
+/// Upper bound for the DB connectivity probe. Kept well below the orchestrator's (e.g.
+/// k8s) health check timeout (typically a few seconds) so that, even if the database is
+/// unresponsive, `/health` itself returns 503 before it would hang long enough to trip the
+/// orchestrator's own timeout.
 const DB_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Serialize)]
@@ -18,14 +18,14 @@ pub struct HealthResponse {
     pub status: &'static str,
 }
 
-/// `/health`ハンドラ。固定で`{"status":"ok"}`を返すだけだと、DB障害時や
-/// コネクションプール枯渇時にもオーケストレータへ「正常」と偽り続けてしまい、
-/// 異常なインスタンスの検知・排除ができなくなる。そのため実際に軽量なクエリで
-/// DBへの疎通を確認し、失敗時は503（Service Unavailable）を返す。
+/// The `/health` handler. Simply always returning `{"status":"ok"}` would keep telling the
+/// orchestrator the instance is healthy even during a DB outage or pool exhaustion, making
+/// it impossible to detect and evict a broken instance. So this actually probes the
+/// database with a lightweight query and returns 503 (Service Unavailable) on failure.
 ///
-/// RLSテナントコンテキストは不要な軽量チェックのため、`TenantDb::acquire_for_tenant`
-/// （`app.current_tenant`の設定を伴う）ではなく、プールから直接コネクションを
-/// 取得するだけにとどめる。
+/// This check doesn't need an RLS tenant context, so it just grabs a connection directly
+/// from the pool instead of going through `TenantDb::acquire_for_tenant` (which also sets
+/// `app.current_tenant`).
 pub async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     match check_db(&state).await {
         Ok(()) => (StatusCode::OK, Json(HealthResponse { status: "ok" })),
@@ -113,10 +113,10 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
-    /// `Pool::close()`はプールを共有する全クローンに波及し、以降の`acquire()`は
-    /// 即座に`Error::PoolClosed`を返すようになる。実際のDB障害・プール枯渇を
-    /// 再現する最も手軽な方法として、これを使いDB到達不能時に503が返る
-    /// パスを検証する。
+    /// `Pool::close()` affects every clone that shares the pool, and subsequent `acquire()`
+    /// calls immediately return `Error::PoolClosed`. This is the easiest way to reproduce a
+    /// real DB outage / pool exhaustion, so it's used here to exercise the path where an
+    /// unreachable database results in a 503.
     #[sqlx::test(migrations = "../../migrations")]
     async fn health_returns_service_unavailable_when_db_is_unreachable(pool: PgPool) {
         pool.close().await;

@@ -3,16 +3,17 @@ use utoipa::ToSchema;
 
 use super::types::MetaSchemaDefinition;
 
-/// 要件§2.4のバージョニング規則に基づく差分判定結果。
-/// `is_breaking = true` の場合、呼び出し側は新versionの行をINSERTしなければならない。
+/// Diff result describing whether a metaschema change is backward compatible.
+/// When `is_breaking = true`, the caller must INSERT a new version row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct VersioningDiff {
     pub is_breaking: bool,
     pub reasons: Vec<String>,
 }
 
-/// 非破壊：フィールド追加（任意項目）、説明変更、enum値追加
-/// 破壊的：フィールド削除・改名・型変更・必須化、entity_type削除、relation_type変更
+/// Non-breaking: adding an optional field, description changes, adding enum values.
+/// Breaking: removing/renaming a field, changing its type, making it required,
+/// removing an entity_type, changing a relation_type.
 pub fn diff(old: &MetaSchemaDefinition, new: &MetaSchemaDefinition) -> VersioningDiff {
     let mut reasons = Vec::new();
 
@@ -50,8 +51,9 @@ pub fn diff(old: &MetaSchemaDefinition, new: &MetaSchemaDefinition) -> Versionin
                 ));
             }
 
-            // enum制約自体の撤廃（Some -> None）は非破壊的な拡張（widening）として扱う。
-            // 破壊的なのは、enum制約が残ったまま既存の値が使えなくなるケースのみ。
+            // Removing the enum constraint entirely (Some -> None) is treated
+            // as a non-breaking widening. Only the case where the constraint
+            // remains but an existing value is no longer allowed is breaking.
             if let Some(old_enum) = &old_field.enum_values
                 && let Some(new_enum) = &new_field.enum_values
             {

@@ -10,11 +10,10 @@ use crate::error::YorishiroError;
 const KEY_PREFIX_BYTES: usize = 6;
 const KEY_SECRET_BYTES: usize = 24;
 
-/// APIキーが持つ権限レベル。宣言順が`Ord`の導出に使われるため、
-/// `Read < Write < Schema`という階層（上位scopeは下位の権限を包含する）を
-/// 前提にする箇所は必ずこの並びに依存する。`serde`表現はDBの`scope`列
-/// （'read'/'write'/'schema'）と一致させてあり、REST/MCPアダプタ側で
-/// 別途マッピングを持たずに済む。
+/// Permission level held by an API key. Declaration order feeds the derived `Ord`, so any
+/// code relying on the `Read < Write < Schema` hierarchy (a higher scope subsumes lower ones)
+/// depends on this exact ordering. The `serde` representation matches the DB `scope` column
+/// ('read'/'write'/'schema'), so REST/MCP adapters don't need a separate mapping.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -43,15 +42,16 @@ impl ApiKeyScope {
         }
     }
 
-    /// このscopeを持つキーで`required`が要求する操作を行えるか。
-    /// 上位scopeは下位の権限を包含する（`write`キーは`read`操作も許可される）。
+    /// Whether a key with this scope can perform an operation requiring `required`.
+    /// A higher scope subsumes lower ones (a `write` key is also allowed to `read`).
     pub fn satisfies(self, required: ApiKeyScope) -> bool {
         self >= required
     }
 }
 
-/// APIキー認証で確定したテナント・スコープ情報。以降のRLSコンテキスト設定
-/// （`TenantDb::acquire_for_tenant`）とスコープ強制の両方の起点になる。
+/// Tenant and scope information resolved by API key authentication. Serves as the starting
+/// point for both the subsequent RLS context setup (`TenantDb::acquire_for_tenant`) and
+/// scope enforcement.
 #[derive(Debug, Clone)]
 pub struct AuthContext {
     pub api_key_id: Uuid,
@@ -63,8 +63,8 @@ pub struct CreatedApiKey {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub scope: ApiKeyScope,
-    /// 生のAPIキー文字列。DBにはハッシュしか保存されないため、この呼び出しの
-    /// 戻り値以外で二度と取得できない。呼び出し側は確実にユーザーへ提示すること。
+    /// The raw API key string. Only its hash is stored in the DB, so this return value is
+    /// the only place it can ever be obtained. Callers must make sure to surface it to the user.
     pub plaintext: String,
 }
 
@@ -78,10 +78,10 @@ fn hash_key(raw: &str) -> Vec<u8> {
     Sha256::digest(raw.as_bytes()).to_vec()
 }
 
-/// 新しいAPIキーを発行する。キー自体は`ysr_<prefix>_<secret>`の形式で、
-/// `secret`部分（192bit）だけが実質的な認証情報。APIキーは十分に高い
-/// エントロピーを持つため、ハッシュ関数はbcrypt/argon2のような低速なものではなく
-/// SHA-256で十分（オフライン総当たりが現実的な脅威にならないため）。
+/// Issues a new API key of the form `ysr_<prefix>_<secret>`, where only the `secret` part
+/// (192 bits) is the actual credential. SHA-256 is sufficient here rather than a slow KDF
+/// like bcrypt/argon2, since API keys already carry enough entropy that offline
+/// brute-forcing isn't a realistic threat.
 pub async fn create_api_key(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -111,13 +111,13 @@ pub async fn create_api_key(
     })
 }
 
-/// 提示された生のAPIキー文字列を検証し、紐づくテナントとscopeを解決する。
+/// Verifies a presented raw API key and resolves the tenant and scope it belongs to.
 ///
-/// この時点ではまだテナントが確定していない（RLSの`app.current_tenant`を
-/// 設定しようがない）ため、`pool`から直接引いたコネクションで呼び出す
-/// SECURITY DEFINER関数`authenticate_api_key`を使う。この関数はDB内で
-/// api_keysテーブルのRLSを検証専用にバイパスする代わりに、返す列を
-/// id/tenant_id/scopeだけに絞ってある（`key_hash`自体は返さない）。
+/// At this point the tenant isn't known yet (so RLS's `app.current_tenant` can't be set),
+/// which is why this calls the SECURITY DEFINER function `authenticate_api_key` over a
+/// connection acquired directly from `pool`. That function bypasses RLS on the `api_keys`
+/// table for verification purposes only, and limits the columns it returns to
+/// id/tenant_id/scope (never the `key_hash` itself).
 pub async fn authenticate(
     pool: &PgPool,
     presented_key: &str,
@@ -145,8 +145,8 @@ pub async fn authenticate(
     })
 }
 
-/// 認証済みのcontextが要求scopeを満たすことを強制する。満たさない場合は
-/// `YorishiroError::ScopeInsufficient`を返す。
+/// Enforces that an authenticated context satisfies the required scope, returning
+/// `YorishiroError::ScopeInsufficient` when it doesn't.
 pub fn require_scope(ctx: &AuthContext, required: ApiKeyScope) -> Result<(), YorishiroError> {
     if ctx.scope.satisfies(required) {
         Ok(())
@@ -156,13 +156,13 @@ pub fn require_scope(ctx: &AuthContext, required: ApiKeyScope) -> Result<(), Yor
                 "this operation requires {required:?} scope but the API key has {:?} scope",
                 ctx.scope
             ),
-            hint: "十分なscopeを持つAPIキーを発行し直してください".into(),
+            hint: "Reissue an API key with sufficient scope".into(),
         })
     }
 }
 
-/// APIキーの最終使用時刻を記録する。認証の成否には影響しないベストエフォートな
-/// 記録なので、呼び出し側はこの関数のエラーでリクエスト全体を失敗させる必要はない。
+/// Records the API key's last-used timestamp. This is a best-effort update that doesn't
+/// affect authentication outcomes, so callers don't need to fail the whole request if it errors.
 pub async fn touch_last_used(
     conn: &mut PgConnection,
     tenant_id: Uuid,
@@ -177,10 +177,10 @@ pub async fn touch_last_used(
     Ok(())
 }
 
-/// 認可の唯一の入口。「提示された生キーを検証し、要求scopeを満たすことを確認し、
-/// RLSコンテキスト設定済みのコネクションを返す」までを1つにまとめてある。
-/// REST/MCP双方のアダプタがこの関数を経由しない限り`&mut PgConnection`を得る
-/// 手段がない構造にすることで、スコープチェックの呼び忘れを構造的に防ぐ。
+/// The single entry point for authorization: validates the presented raw key, confirms it
+/// satisfies the required scope, and returns a connection with the RLS context already set.
+/// REST and MCP adapters have no way to obtain a `&mut PgConnection` except through this
+/// function, which structurally prevents a scope check from being forgotten.
 pub async fn authorize(
     tenant_db: &TenantDb,
     presented_key: &str,
@@ -201,12 +201,13 @@ pub async fn authorize(
     Ok((ctx, conn))
 }
 
-/// `authorize`のコネクション非保持版。埋め込み生成のような時間のかかる処理を挟んでから
-/// DBへアクセスする経路（検索クエリ）で使う。`authorize`はコネクションをハンドラの
-/// 生存期間中ずっと保持するため、埋め込み生成（LocalOnnxではプロセス内直列化のため
-/// 待ち時間に上限がない）の間プール接続を占有してしまい、プール枯渇が無関係な
-/// エンドポイントへ波及する。この関数は認証・scope検証のみ行い、`last_used_at`の
-/// 更新は短命のコネクションで済ませて即座に返却する。
+/// A connection-free variant of `authorize`, used on paths (search queries) that need to run
+/// a slow step — like embedding generation — before touching the DB. `authorize` holds a
+/// connection for the handler's entire lifetime, which would tie up a pool connection during
+/// embedding generation (unbounded wait time with LocalOnnx due to in-process serialization),
+/// letting pool exhaustion spill over onto unrelated endpoints. This function only performs
+/// authentication and scope validation, updating `last_used_at` through a short-lived
+/// connection that's returned immediately.
 pub async fn authorize_scope(
     tenant_db: &TenantDb,
     presented_key: &str,
@@ -318,10 +319,10 @@ mod tests {
         assert!(matches!(err, YorishiroError::ScopeInsufficient { .. }));
     }
 
-    /// `authenticate_api_key`関数が実際に必要であることを裏取りするテスト。
-    /// `TenantDb::connect`が本番で行うのと同じ`SET ROLE yorishiro_app`を経た
-    /// コネクション（RLSをバイパスできない・`app.current_tenant`も未設定）
-    /// でも認証が成立することを検証する。
+    /// Verifies that `authenticate_api_key` is actually needed: authentication must still
+    /// succeed over a connection that went through the same `SET ROLE yorishiro_app` that
+    /// `TenantDb::connect` uses in production (which can't bypass RLS and has no
+    /// `app.current_tenant` set).
     #[sqlx::test(migrations = "../../migrations")]
     async fn authenticates_over_a_connection_that_cannot_bypass_rls(pool: PgPool) {
         let tenant_id = seed_tenant(&pool).await;
@@ -367,8 +368,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(ctx.tenant_id, tenant_id);
-        // 返されたコネクションはRLSコンテキスト設定済みで、そのテナントの
-        // 行を問題なく参照できることを裏取りする。
+        // The returned connection already has its RLS context set, so it can read this
+        // tenant's rows without issue.
         let count: (i64,) = sqlx::query_as("SELECT count(*) FROM tenants")
             .fetch_one(&mut *conn)
             .await

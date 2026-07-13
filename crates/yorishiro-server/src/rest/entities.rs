@@ -38,11 +38,11 @@ pub struct ListEntitiesParams {
     path = "/api/entities",
     request_body = CreateEntityRequest,
     responses(
-        (status = 201, description = "エンティティを作成した", body = EntityRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "指定されたスキーマ/entity_typeが存在しない", body = crate::error::ApiErrorBody),
-        (status = 422, description = "dataがスキーマに適合しない", body = crate::error::ApiErrorBody),
+        (status = 201, description = "Entity created", body = EntityRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The specified schema or entity_type does not exist", body = crate::error::ApiErrorBody),
+        (status = 422, description = "data does not conform to the schema", body = crate::error::ApiErrorBody),
     ),
     tag = "entities",
 )]
@@ -65,12 +65,12 @@ pub async fn create_entity(
 #[utoipa::path(
     get,
     path = "/api/entities/{id}",
-    params(("id" = Uuid, Path, description = "エンティティID")),
+    params(("id" = Uuid, Path, description = "Entity ID")),
     responses(
-        (status = 200, description = "エンティティを取得した", body = EntityRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Entity retrieved", body = EntityRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Entity not found", body = crate::error::ApiErrorBody),
     ),
     tag = "entities",
 )]
@@ -86,14 +86,14 @@ pub async fn get_entity(
 #[utoipa::path(
     put,
     path = "/api/entities/{id}",
-    params(("id" = Uuid, Path, description = "エンティティID")),
+    params(("id" = Uuid, Path, description = "Entity ID")),
     request_body = UpdateEntityRequest,
     responses(
-        (status = 200, description = "エンティティを更新した", body = EntityRecord),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
-        (status = 422, description = "dataがスキーマに適合しない", body = crate::error::ApiErrorBody),
+        (status = 200, description = "Entity updated", body = EntityRecord),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Entity not found", body = crate::error::ApiErrorBody),
+        (status = 422, description = "data does not conform to the schema", body = crate::error::ApiErrorBody),
     ),
     tag = "entities",
 )]
@@ -112,12 +112,12 @@ pub async fn update_entity(
 #[utoipa::path(
     delete,
     path = "/api/entities/{id}",
-    params(("id" = Uuid, Path, description = "エンティティID")),
+    params(("id" = Uuid, Path, description = "Entity ID")),
     responses(
-        (status = 204, description = "エンティティを削除した"),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
-        (status = 404, description = "エンティティが存在しない", body = crate::error::ApiErrorBody),
+        (status = 204, description = "Entity deleted"),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
+        (status = 404, description = "Entity not found", body = crate::error::ApiErrorBody),
     ),
     tag = "entities",
 )]
@@ -135,9 +135,9 @@ pub async fn delete_entity(
     path = "/api/entities",
     params(ListEntitiesParams),
     responses(
-        (status = 200, description = "エンティティを一覧取得した", body = Vec<EntityRecord>),
-        (status = 401, description = "認証情報が無効", body = crate::error::ApiErrorBody),
-        (status = 403, description = "scopeが不足している", body = crate::error::ApiErrorBody),
+        (status = 200, description = "List of entities retrieved", body = Vec<EntityRecord>),
+        (status = 401, description = "Invalid or missing credentials", body = crate::error::ApiErrorBody),
+        (status = 403, description = "Insufficient scope", body = crate::error::ApiErrorBody),
     ),
     tag = "entities",
 )]

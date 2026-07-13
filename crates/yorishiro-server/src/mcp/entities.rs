@@ -16,11 +16,11 @@ use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateEntityArgs {
-    /// エンティティが従うスキーマの名前。そのテナントの現在アクティブなバージョンが使われる。
+    /// Name of the schema this entity conforms to. The tenant's current active version is used.
     pub schema_name: String,
-    /// スキーマ内で定義されたentity_type名。
+    /// entity_type name declared in the schema.
     pub entity_type: String,
-    /// スキーマの`fields`定義に従ったエンティティ本体（JSONオブジェクト）。
+    /// Entity body (JSON object) conforming to the schema's `fields` definition.
     pub data: Value,
 }
 
@@ -32,7 +32,7 @@ pub struct GetEntityArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateEntityArgs {
     pub id: Uuid,
-    /// 置き換え後のエンティティ本体。作成時点のスキーマバージョンに対して検証される。
+    /// Replacement entity body. Validated against the schema version in effect when the entity was created.
     pub data: Value,
 }
 
@@ -43,17 +43,16 @@ pub struct DeleteEntityArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListEntitiesArgs {
-    /// 指定した場合、このentity_typeのエンティティのみに絞り込む。
     pub entity_type: Option<String>,
-    /// 最大件数（省略時は50）。
+    /// Maximum number of results (defaults to 50 if omitted).
     pub limit: Option<i64>,
-    /// スキップする件数（省略時は0）。
+    /// Number of records to skip (defaults to 0 if omitted).
     pub offset: Option<i64>,
 }
 
 #[tool_router(vis = "pub(crate)", router = tool_router_entities)]
 impl YorishiroMcpServer {
-    #[tool(description = "新しいエンティティを作成する（write scope必須）")]
+    #[tool(description = "Create a new entity (requires write scope)")]
     pub async fn create_entity(
         &self,
         Parameters(args): Parameters<CreateEntityArgs>,
@@ -80,7 +79,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "IDを指定してエンティティを1件取得する（read scope必須）")]
+    #[tool(description = "Get a single entity by ID (requires read scope)")]
     pub async fn get_entity(
         &self,
         Parameters(args): Parameters<GetEntityArgs>,
@@ -98,7 +97,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "既存のエンティティのdataを置き換える（write scope必須）")]
+    #[tool(description = "Replace the data of an existing entity (requires write scope)")]
     pub async fn update_entity(
         &self,
         Parameters(args): Parameters<UpdateEntityArgs>,
@@ -119,7 +118,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "エンティティを削除する（write scope必須）")]
+    #[tool(description = "Delete an entity (requires write scope)")]
     pub async fn delete_entity(
         &self,
         Parameters(args): Parameters<DeleteEntityArgs>,
@@ -137,7 +136,7 @@ impl YorishiroMcpServer {
         }
     }
 
-    #[tool(description = "エンティティを一覧取得する（read scope必須）")]
+    #[tool(description = "List entities (requires read scope)")]
     pub async fn list_entities(
         &self,
         Parameters(args): Parameters<ListEntitiesArgs>,

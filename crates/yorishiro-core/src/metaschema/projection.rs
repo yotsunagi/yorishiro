@@ -2,8 +2,9 @@ use serde_json::{Map, Value, json};
 
 use super::types::{EntityTypeDef, FieldTypeName};
 
-/// §9投影仕様：EntityTypeDefから、entityの`data`検証・MCP inputSchema生成の
-/// 両方に使えるJSON Schemaを生成する。生成元はメタスキーマのみ（アダプタは結果を受け取るだけ）。
+/// Builds a JSON Schema from an EntityTypeDef that's used both for validating
+/// entity `data` and generating the MCP inputSchema.
+/// The metaschema is the sole source for this schema; adapters only consume the result.
 pub fn entity_type_to_json_schema(entity_type: &EntityTypeDef) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
