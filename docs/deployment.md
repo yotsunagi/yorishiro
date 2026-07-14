@@ -24,6 +24,18 @@ The admin CLI can be run from the same image:
 $ docker run --rm -e DATABASE_URL=postgres://... yorishiro admin list-tenants
 ```
 
+## Releasing
+
+Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which builds
+`yorishiro-server` binaries for `x86_64`/`aarch64` Linux (glibc) and attaches them to a
+GitHub Release, and builds+pushes a multi-arch Docker image to
+`ghcr.io/yotsunagi/yorishiro:vX.Y.Z` (and `:latest`). Both architectures build natively (no
+QEMU), matching the `ort`/onnxruntime build requirements above.
+
+```console
+$ git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
 ## Hosted deployment
 
 Everything above is all a self-hosted (community) deployment needs — set

@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE_NAME: ghcr.io/yotsunagi/yorishiro
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  binary:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # See ci.yml: ort-sys extracts the onnxruntime binary here at build time.
+          cache-directories: ~/.cache/ort.pyke.io
+
+      - name: Build
+        run: cargo build --release -p yorishiro-server
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf "dist/yorishiro-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
+            -C target/release yorishiro-server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  docker:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ matrix.arch }}
+
+  docker-manifest:
+    needs: docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Each arch was pushed as its own tag by the (native, no-QEMU) `docker` job above;
+      # this merges them into one multi-arch manifest under the version and `latest` tags.
+      - name: Create multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.IMAGE_NAME }}:${{ github.ref_name }}" \
+            -t "${{ env.IMAGE_NAME }}:latest" \
+            "${{ env.IMAGE_NAME }}:${{ github.ref_name }}-amd64" \
+            "${{ env.IMAGE_NAME }}:${{ github.ref_name }}-arm64"
+
+  github-release:
+    needs: binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
