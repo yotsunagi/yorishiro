@@ -4,24 +4,41 @@
 
 ## Prerequisites and startup
 
-Prerequisites: Docker / Docker Compose / make. `make init` builds the images and starts
-PostgreSQL plus `app`, a container running the actual release binary from the multi-stage
-`Dockerfile` at the repo root (the same image used in production).
-
-Configuring an embedding provider is required before the server will start. `docker-compose.yml`
-already points `app` at the local ONNX provider; here's how to fetch a model for it (needs no
-external service):
+Configuring an embedding provider is required before the server will start. The examples
+below use the local ONNX provider, which needs no external service — fetch a
+768-dimensional BERT-family model first (see [embedding-providers.md](embedding-providers.md)):
 
 ```console
-$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
-
-# Place a 768-dimensional BERT-family ONNX model (see embedding-providers.md)
 $ mkdir -p models
 $ curl -L -o models/model.onnx \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/onnx/model_quantized.onnx
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
+```
 
+The quickest way to start the server is the prebuilt Docker image
+(`ghcr.io/yotsunagi/yorishiro:latest`, published on every release):
+
+```console
+$ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
+    -v "$(pwd)/models:/app/models:ro" \
+    -e DATABASE_URL=postgres://... \
+    -e YSR_EMBEDDING_PROVIDER=local \
+    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
+    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
+    ghcr.io/yotsunagi/yorishiro:latest
+```
+
+See [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker
+(including background/systemd operation), or for building from source. For local
+development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images
+(from the same multi-stage `Dockerfile` the release image is built from) and starts
+PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider
+configured above:
+
+```console
+$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
+# (place models/model.onnx and models/tokenizer.json as above)
 $ make init
 ```
 
