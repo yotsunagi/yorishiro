@@ -79,7 +79,10 @@ async fn run(cli: Cli) -> Result<()> {
     let embedding_provider = build_embedding_provider()?;
     let state = AppState::new(tenant_db, identity_pool, embedding_provider);
     let embedding_tasks = state.embedding_tasks().clone();
-    let web_dir = Some(std::env::var("YSR_WEB_DIR").unwrap_or_else(|_| "web".into()));
+    // Unset by default: the setup/login SPA is compiled into the binary (see
+    // yorishiro-web), so there's normally no `web/` directory to point at. Set this to
+    // iterate on `web/`'s contents without rebuilding.
+    let web_dir = std::env::var("YSR_WEB_DIR").ok();
     let app = build_app(state, web_dir);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

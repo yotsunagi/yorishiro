@@ -1,0 +1,15 @@
+[package]
+name = "yorishiro-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+mime_guess.workspace = true
+rust-embed.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true

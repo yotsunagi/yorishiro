@@ -24,7 +24,7 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-これだけでシングルテナント構成として完全に動作します。`YSR_WEB_DIR`（`web/`からWeb UIを配信）、`YORISHIRO_MAX_TENANTS`（このデプロイをテナント1つに制限）、`YSR_EMBEDDING_PROVIDER`（上でマウントした`models/model.onnx`/`models/tokenizer.json`を使うローカルONNXモデル）は全て既定でこの値になっているためです。変更方法は[configuration.md](configuration.md)を参照してください。
+これだけでシングルテナント構成として完全に動作します。Web UI（バイナリに組み込み済みで、別途`web/`を取得・マウントする必要なし）、`YORISHIRO_MAX_TENANTS`（このデプロイをテナント1つに制限）、`YSR_EMBEDDING_PROVIDER`（上でマウントした`models/model.onnx`/`models/tokenizer.json`を使うローカルONNXモデル）は全て既定でこの値になっているためです。変更方法は[configuration.md](configuration.md)を参照してください。
 
 上記の`-e`/環境変数はすべて`config.yml`ファイルでも指定できます（上のDockerイメージなら
 `/app/config.yml`にマウントしてください）。デプロイの基本設定を長い`-e`の羅列で書くより
@@ -49,7 +49,7 @@ $ make init
 |---|---|
 | `http://localhost:8080/up` | Liveness probe（プロセスが起動していれば依存関係を見ず常に200） |
 | `http://localhost:8080/health` | Readiness check（DB接続も確認し、障害時は503） |
-| `http://localhost:8080/` | セットアップ・ログイン用Web UI（`YSR_WEB_DIR`から配信。既定は`web`、後述） |
+| `http://localhost:8080/` | セットアップ・ログイン用Web UI（バイナリに組み込み済み。実ディレクトリから配信させる場合は[configuration.md](configuration.md)の`YSR_WEB_DIR`を参照） |
 | `http://localhost:8080/docs` | Swagger UI（REST APIドキュメント） |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI仕様 |
 | `http://localhost:8080/mcp` | MCPエンドポイント（Streamable HTTP） |

@@ -27,7 +27,7 @@ way to configure anything.
 | `YSR_BIND` | Listen address (default: `0.0.0.0:8080`) |
 | `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access (e.g. so a browser-based dashboard on a different origin can call `/auth/login`/`/api/members`). Cross-origin reads are disabled if unset |
 | `YORISHIRO_MAX_TENANTS` | Deployment-wide cap on the number of tenants `admin create-tenant` may create. Defaults to `1` (single-tenant) if unset. Set to `0` for unlimited, or to a higher number to allow that many tenants. `POST /auth/signup` never creates a tenant (it only redeems an invite into an *existing* one), so it is unaffected. This is also what gates the first-run setup wizard (`GET`/`POST /setup`, see [setup.md](setup.md#first-run-setup)) — enabled only while the cap resolves to an actual limit (i.e. not `0`) |
-| `YSR_WEB_DIR` | Directory the setup/login web UI's static files are served from at `/`. Defaults to `web` (the directory shipped alongside the binary/Docker image) if unset |
+| `YSR_WEB_DIR` | The setup/login web UI's static files are compiled into the binary and served at `/` by default. Set this to serve them from a real directory on disk instead (e.g. to iterate on `web/` without rebuilding) |
 | `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | Per-client-IP rate limit on `/auth/signup`, `/auth/login`, and `/setup` — the endpoints reachable without a bearer token, and therefore the only ones an unauthenticated caller can brute-force. Defaults: 10 requests per 60 seconds |
 | `RUST_LOG` | Log level (e.g. `info`) |
 

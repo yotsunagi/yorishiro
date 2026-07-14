@@ -73,9 +73,10 @@ $ curl -L -o models/tokenizer.json \
 
 ### Prebuilt Docker image
 
-Every tag's release publishes `ghcr.io/yotsunagi/yorishiro:vX.Y.Z` (and `:latest`), which
-already bundles the setup-wizard SPA (`web/`) — only the embedding model needs mounting in.
-`-d --restart unless-stopped` runs it detached and brings it back up on reboot/crash:
+Every tag's release publishes `ghcr.io/yotsunagi/yorishiro:vX.Y.Z` (and `:latest`); the
+setup-wizard SPA (`web/`) is compiled into the binary, so only the embedding model needs
+mounting in. `-d --restart unless-stopped` runs it detached and brings it back up on
+reboot/crash:
 
 ```console
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
@@ -84,7 +85,7 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-That's a complete single-tenant deployment as-is — `YSR_WEB_DIR`, `YORISHIRO_MAX_TENANTS`, and `YSR_EMBEDDING_PROVIDER` (plus the ONNX model/tokenizer paths) all already default to the values shown in [docs/setup.md](docs/setup.md), matching the `models/` layout fetched above. See [docs/deployment.md](docs/deployment.md) for running the prebuilt Linux binary from [GitHub Releases](https://github.com/yotsunagi/yorishiro/releases) without Docker, including how to run it in the background via systemd.
+That's a complete single-tenant deployment as-is — `YORISHIRO_MAX_TENANTS` and `YSR_EMBEDDING_PROVIDER` (plus the ONNX model/tokenizer paths) all already default to the values shown in [docs/setup.md](docs/setup.md), matching the `models/` layout fetched above. See [docs/deployment.md](docs/deployment.md) for running the prebuilt Linux binary from [GitHub Releases](https://github.com/yotsunagi/yorishiro/releases) without Docker, including how to run it in the background via systemd.
 
 ### From source (Docker Compose)
 

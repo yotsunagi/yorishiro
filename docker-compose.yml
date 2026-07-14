@@ -31,12 +31,11 @@ services:
       # Deployments that never need that can leave this unset -- an empty value disables CORS
       # entirely, same as before this existed.
       YSR_CORS_ORIGINS: http://localhost:8081
-      # All four of these already match yorishiro-server's built-in defaults (web/ served at
-      # "/", single-tenant cap that also gates the first-run setup wizard, local ONNX embedding
-      # provider reading models/model.onnx + models/tokenizer.json -- see
-      # crates/yorishiro-server/src/main.rs and rest/setup.rs); spelled out here for clarity.
-      # Set YORISHIRO_MAX_TENANTS to "0" to allow multiple tenants instead.
-      YSR_WEB_DIR: web
+      # These already match yorishiro-server's built-in defaults (single-tenant cap that also
+      # gates the first-run setup wizard, local ONNX embedding provider reading
+      # models/model.onnx + models/tokenizer.json -- see crates/yorishiro-server/src/main.rs
+      # and rest/setup.rs); spelled out here for clarity. Set YORISHIRO_MAX_TENANTS to "0" to
+      # allow multiple tenants instead.
       YORISHIRO_MAX_TENANTS: "1"
       YSR_EMBEDDING_PROVIDER: local
       YSR_ONNX_MODEL_PATH: models/model.onnx

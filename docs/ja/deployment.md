@@ -4,7 +4,7 @@
 
 ## Docker(ビルド済みイメージ)
 
-`vX.Y.Z`タグをpushするたびに`ghcr.io/yotsunagi/yorishiro:vX.Y.Z`(および`:latest`)が公開されます(詳細は下の[リリース](#リリース)参照)。このイメージにはセットアップウィザードのSPA(`web/`)が既に同梱されており、ローカルでビルドする必要はありません:
+`vX.Y.Z`タグをpushするたびに`ghcr.io/yotsunagi/yorishiro:vX.Y.Z`(および`:latest`)が公開されます(詳細は下の[リリース](#リリース)参照)。セットアップウィザードのSPA(`web/`)はバイナリに組み込まれているため、別途ビルドやマウントは不要です:
 
 ```console
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
@@ -27,7 +27,7 @@ $ docker run --rm -e DATABASE_URL=postgres://... ghcr.io/yotsunagi/yorishiro:lat
 
 ## ビルド済みバイナリ(Dockerなし)
 
-各リリースにはLinuxバイナリ(`yorishiro-server-vX.Y.Z-linux-amd64.tar.gz` / `-linux-arm64.tar.gz`)も[GitHub Release](https://github.com/yotsunagi/yorishiro/releases)に添付されます。Dockerイメージと異なり、このアーカイブには`yorishiro-server`バイナリそのものしか含まれていません — セットアップウィザードの`web/`ディレクトリや`models/`はビルドに組み込まれる資産ではないため同梱されていません。リリース元と同じタグから全て取得し、バイナリと同じ場所に置いてください(`YSR_WEB_DIR=web`のような相対パスは、プロセスの作業ディレクトリを基準に解決されます):
+各リリースにはLinuxバイナリ(`yorishiro-server-vX.Y.Z-linux-amd64.tar.gz` / `-linux-arm64.tar.gz`)も[GitHub Release](https://github.com/yotsunagi/yorishiro/releases)に添付されます。このアーカイブには`yorishiro-server`バイナリそのものしか含まれていませんが、セットアップウィザードの`web/`はバイナリに組み込まれているため取得不要です — `models/`(ローカルONNXプロバイダを使う場合)だけは、モデルの重みが埋め込まれていないためバイナリと同じ場所に置く必要があります:
 
 ```console
 $ mkdir -p /opt/yorishiro && cd /opt/yorishiro
@@ -35,9 +35,6 @@ $ mkdir -p /opt/yorishiro && cd /opt/yorishiro
 # バイナリ本体
 $ curl -L -o yorishiro.tar.gz https://github.com/yotsunagi/yorishiro/releases/download/vX.Y.Z/yorishiro-server-vX.Y.Z-linux-amd64.tar.gz
 $ tar -xzf yorishiro.tar.gz && rm yorishiro.tar.gz
-
-# web/(セットアップウィザード)、同じタグから取得
-$ curl -L https://github.com/yotsunagi/yorishiro/archive/refs/tags/vX.Y.Z.tar.gz | tar -xz --strip-components=1 "yorishiro-*/web"
 
 # models/(ローカルONNX埋め込みプロバイダ、既定 -- OpenAI互換エンドポイントを使いたい場合はembedding-providers.md参照)
 $ mkdir -p models
@@ -48,7 +45,7 @@ $ curl -L -o models/tokenizer.json https://huggingface.co/Xenova/all-mpnet-base-
 $ curl -L -o .env https://raw.githubusercontent.com/yotsunagi/yorishiro/vX.Y.Z/.env.example
 ```
 
-`.env`を編集し、最低限`DATABASE_URL`を設定してください。それ以外はコメントアウトのままで構いません — `YSR_WEB_DIR`・`YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`(とONNXモデル/トークナイザーのパス)は全て、セルフホスト環境が通常望むシングルテナント・Web UI有効・ローカルONNX埋め込みの値を既定としており、上で取得したファイルとも一致します — 全変数のリファレンスと変更方法は[configuration.md](configuration.md)を参照してください。
+`.env`を編集し、最低限`DATABASE_URL`を設定してください。それ以外はコメントアウトのままで構いません — `YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`(とONNXモデル/トークナイザーのパス)は全て、セルフホスト環境が通常望むシングルテナント・Web UI有効・ローカルONNX埋め込みの値を既定としており、上で取得したファイルとも一致します — 全変数のリファレンスと変更方法は[configuration.md](configuration.md)を参照してください。
 
 このバイナリは実際のプロセス環境変数からしか設定を読みません — `.env`ファイル自体を読む仕組みはありません — そのため直接実行する場合は、まず`.env`をシェルに読み込む必要があります。一方`config.yml`ファイルはバイナリが直接読み込みます（[configuration.md](configuration.md#configyml)と[`config.example.yml`](../../config.example.yml)を参照）— 今回のようなベアメタル/systemdデプロイでは、バイナリの隣に`config.yml`を置くだけで済むため、下記の2通りの`.env`読み込み方法よりシンプルなことが多いです（シェルでのsourceも`EnvironmentFile=`も不要）:
 
@@ -93,4 +90,4 @@ $ git tag vX.Y.Z && git push origin vX.Y.Z
 
 ## シングルテナント構成
 
-`YORISHIRO_MAX_TENANTS=1`・`YSR_WEB_DIR=web`・`YSR_EMBEDDING_PROVIDER=local`(いずれも[configuration.md](configuration.md)参照)は全て既定値なので、これらを未設定のままにしたデプロイはそのまま[`web/`](../web)のSPAを配信し、そのセットアップウィザード([setup.md](setup.md#初回セットアップ)参照)だけでデプロイの唯一のテナントをオンボードでき、埋め込みにはローカルONNXモデルを使います。テナント上限を外すには`YORISHIRO_MAX_TENANTS=0`を設定してください。
+`YORISHIRO_MAX_TENANTS=1`・`YSR_EMBEDDING_PROVIDER=local`(いずれも[configuration.md](configuration.md)参照)は共に既定値なので、これらを未設定のままにしたデプロイはそのまま[`web/`](../web)のSPA(バイナリに組み込み済み)を配信し、そのセットアップウィザード([setup.md](setup.md#初回セットアップ)参照)だけでデプロイの唯一のテナントをオンボードでき、埋め込みにはローカルONNXモデルを使います。テナント上限を外すには`YORISHIRO_MAX_TENANTS=0`を設定してください。

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 yorishiro-core = { path = "../yorishiro-core" }
+yorishiro-web = { path = "../yorishiro-web" }
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true

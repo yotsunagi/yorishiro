@@ -105,13 +105,16 @@ pub fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
 
 /// The routing configuration itself needs to be identical between `main` and the
 /// integration tests, so it's factored into a function that builds the app from just an
-/// `AppState`. `web_dir`, when set, serves a static SPA (see `web/`) as the fallback for any
-/// path not matched by an API route -- this is how this process's first-run setup wizard and
-/// the hosted dashboard's static assets share the same `web/` tree while each process opts in
-/// independently (`YSR_WEB_DIR` here vs. `YORISHIRO_HOSTED_WEB_DIR` in
-/// `yorishiro-hosted-server`). Exposed publicly so a deployment that wants a single process
-/// (e.g. `yorishiro-hosted-server` embedding the full community server) can build this same
-/// router and merge its own routes into it, rather than running two separate processes.
+/// `AppState`. The setup/login SPA (see `web/`, compiled into the binary via `yorishiro-web`)
+/// is always mounted as the fallback for any path not matched by an API route -- this is how
+/// this process's first-run setup wizard and the hosted dashboard's static assets share the
+/// same `web/` tree while each process opts in independently (`YSR_WEB_DIR` here vs.
+/// `YORISHIRO_HOSTED_WEB_DIR` in `yorishiro-hosted-server`). `web_dir`, when set, serves that
+/// SPA from a real directory on disk instead of the compiled-in copy, for local iteration on
+/// `web/` without a rebuild -- see `yorishiro_web::fallback_service`. Exposed publicly so a
+/// deployment that wants a single process (e.g. `yorishiro-hosted-server` embedding the full
+/// community server) can build this same router and merge its own routes into it, rather than
+/// running two separate processes.
 pub fn build_app(state: AppState, web_dir: Option<String>) -> Router {
     let cors = build_cors_layer();
     let mcp_service = StreamableHttpService::new(
@@ -141,10 +144,7 @@ pub fn build_app(state: AppState, web_dir: Option<String>) -> Router {
         )
         .with_state(state);
 
-    match web_dir {
-        Some(dir) => router.fallback_service(tower_http::services::ServeDir::new(dir)),
-        None => router,
-    }
+    router.fallback_service(yorishiro_web::fallback_service(web_dir))
 }
 
 fn build_cors_layer() -> CorsLayer {

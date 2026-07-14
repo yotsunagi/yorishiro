@@ -68,8 +68,8 @@ $ curl -L -o models/tokenizer.json \
 ### ビルド済みDockerイメージ
 
 各タグのリリースで`ghcr.io/yotsunagi/yorishiro:vX.Y.Z`（および`:latest`）が公開されます。
-セットアップウィザードのSPA（`web/`）は既に同梱済みなので、埋め込みモデルをマウント
-するだけです。`-d --restart unless-stopped`でバックグラウンド起動し、再起動/クラッシュ後も
+セットアップウィザードのSPA（`web/`）はバイナリに組み込まれているので、埋め込みモデルを
+マウントするだけです。`-d --restart unless-stopped`でバックグラウンド起動し、再起動/クラッシュ後も
 自動的に立ち上がり直します:
 
 ```console
@@ -79,7 +79,7 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-これだけでシングルテナント構成として完全に動作します — `YSR_WEB_DIR`・`YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`（とONNXモデル/トークナイザーのパス）は全て[docs/ja/setup.md](setup.md)に示す値が既定になっており、上で配置した`models/`のレイアウトとも一致します。Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド起動を含む）は[docs/ja/deployment.md](deployment.md)を参照してください。
+これだけでシングルテナント構成として完全に動作します — `YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`（とONNXモデル/トークナイザーのパス）は全て[docs/ja/setup.md](setup.md)に示す値が既定になっており、上で配置した`models/`のレイアウトとも一致します。Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド起動を含む）は[docs/ja/deployment.md](deployment.md)を参照してください。
 
 ### ソースからビルド（Docker Compose）
 

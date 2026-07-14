@@ -25,7 +25,7 @@ docker composeの`environment:`や`docker compose exec -e`、systemdの`Environm
 | `YSR_BIND` | リッスンアドレス（既定: `0.0.0.0:8080`） |
 | `YSR_CORS_ORIGINS` | ブラウザからアクセスする場合の許可オリジン（カンマ区切り。例: 別オリジンで動くダッシュボードが`/auth/login`/`/api/members`を呼べるようにする）。未設定時はクロスオリジン読み取り不可 |
 | `YORISHIRO_MAX_TENANTS` | `admin create-tenant`が作成できるテナント数のデプロイ全体での上限。未設定時は既定で`1`（シングルテナント）。無制限にするには`0`を、複数テナントを許可するにはその上限数を設定する。`POST /auth/signup`はテナントを作成しない（既存のテナントへ招待を引き換えるだけ）ため影響を受けない。初回セットアップウィザード（`GET`/`POST /setup`、[setup.md](setup.md#初回セットアップ)参照）もこの変数で有効/無効が決まり、上限が実際に有効（`0`でない）な場合のみ有効化される |
-| `YSR_WEB_DIR` | セットアップ・ログイン用Web UIの静的ファイルを`/`で配信するディレクトリ。未設定時は既定でバイナリ/Dockerイメージに同梱された`web`ディレクトリを使う |
+| `YSR_WEB_DIR` | セットアップ・ログイン用Web UIの静的ファイルはバイナリに組み込まれ、既定で`/`から配信される。実ディレクトリから配信させたい場合（`web/`をリビルドなしで編集・反映したい場合など）に設定する |
 | `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | `/auth/signup`・`/auth/login`・`/setup`（bearerトークン不要なエンドポイントであり、未認証の呼び出し元が総当たりできる唯一の経路）に対する、呼び出し元IPごとのレート制限。既定値: 60秒あたり10リクエスト |
 | `RUST_LOG` | ログレベル（例: `info`） |
 

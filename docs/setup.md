@@ -27,7 +27,7 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-This is a complete, working single-tenant deployment as-is: `YSR_WEB_DIR` (serves the web UI from `web/`), `YORISHIRO_MAX_TENANTS` (caps this deployment at one tenant), and `YSR_EMBEDDING_PROVIDER` (uses the local ONNX model at `models/model.onnx`/`models/tokenizer.json`, matching the volume mounted above) all already default to that. See [configuration.md](configuration.md) to change any of them, or [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker (including background/systemd operation), or for building from source. For local development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same multi-stage `Dockerfile` the release image is built from) and starts PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider configured above:
+This is a complete, working single-tenant deployment as-is: the web UI (compiled into the binary -- no separate `web/` directory to fetch or mount), `YORISHIRO_MAX_TENANTS` (caps this deployment at one tenant), and `YSR_EMBEDDING_PROVIDER` (uses the local ONNX model at `models/model.onnx`/`models/tokenizer.json`, matching the volume mounted above) all already default to that. See [configuration.md](configuration.md) to change any of them, or [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker (including background/systemd operation), or for building from source. For local development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same multi-stage `Dockerfile` the release image is built from) and starts PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider configured above:
 
 Every `-e`/environment variable above can go in a `config.yml` file instead (mount it at `/app/config.yml` for the Docker image above), which is often more convenient than a long list of `-e` flags for a deployment's baseline configuration — see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml).
 
@@ -43,7 +43,7 @@ Migrations are applied automatically on startup. Endpoints:
 |---|---|
 | `http://localhost:8080/up` | Liveness probe (always 200 if the process is running; no dependency checks) |
 | `http://localhost:8080/health` | Readiness check (also probes DB connectivity; 503 on outage) |
-| `http://localhost:8080/` | Setup/login web UI (served from `YSR_WEB_DIR`, `web` by default — see below) |
+| `http://localhost:8080/` | Setup/login web UI (compiled into the binary; see `YSR_WEB_DIR` in [configuration.md](configuration.md) to serve it from disk instead) |
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
