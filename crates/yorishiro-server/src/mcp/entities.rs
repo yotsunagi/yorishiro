@@ -72,7 +72,8 @@ impl YorishiroMcpServer {
         };
 
         let workspace_id = authorized.ctx.workspace_id;
-        match entities::create(authorized.conn(), workspace_id, input).await {
+        let created_by = authorized.ctx.user_id;
+        match entities::create(authorized.conn(), workspace_id, input, created_by).await {
             Ok(record) => {
                 self.state.spawn_embedding_sync(
                     authorized.ctx.tenant_id,
@@ -115,7 +116,16 @@ impl YorishiroMcpServer {
         };
 
         let workspace_id = authorized.ctx.workspace_id;
-        match entities::update(authorized.conn(), workspace_id, args.id, args.data).await {
+        let updated_by = authorized.ctx.user_id;
+        match entities::update(
+            authorized.conn(),
+            workspace_id,
+            args.id,
+            args.data,
+            updated_by,
+        )
+        .await
+        {
             Ok(record) => {
                 self.state.spawn_embedding_sync(
                     authorized.ctx.tenant_id,

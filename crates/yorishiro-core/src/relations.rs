@@ -313,6 +313,8 @@ struct NeighborRow {
     entity_data: Value,
     entity_created_at: DateTime<Utc>,
     entity_updated_at: DateTime<Utc>,
+    entity_created_by: Option<Uuid>,
+    entity_updated_by: Option<Uuid>,
 }
 
 impl NeighborRow {
@@ -331,6 +333,8 @@ impl NeighborRow {
                 data: self.entity_data,
                 created_at: self.entity_created_at,
                 updated_at: self.entity_updated_at,
+                created_by: self.entity_created_by,
+                updated_by: self.entity_updated_by,
             },
         }
     }
@@ -352,14 +356,15 @@ pub async fn neighbors(
                 r.created_at AS relation_created_at, \
                 e.id AS entity_id, e.workspace_id AS entity_tenant_id, e.schema_id AS entity_schema_id, \
                 e.schema_version AS entity_schema_version, e.entity_type, e.data AS entity_data, \
-                e.created_at AS entity_created_at, e.updated_at AS entity_updated_at \
+                e.created_at AS entity_created_at, e.updated_at AS entity_updated_at, \
+                e.created_by AS entity_created_by, e.updated_by AS entity_updated_by \
          FROM content.relations r \
          JOIN content.entities e ON e.id = r.target_id AND e.workspace_id = r.workspace_id \
          WHERE r.workspace_id = $1 AND r.source_id = $2 \
          UNION ALL \
          SELECT r.id, r.relation_type, 'in' AS direction, r.properties, r.created_at, \
                 e.id, e.workspace_id, e.schema_id, e.schema_version, e.entity_type, e.data, \
-                e.created_at, e.updated_at \
+                e.created_at, e.updated_at, e.created_by, e.updated_by \
          FROM content.relations r \
          JOIN content.entities e ON e.id = r.source_id AND e.workspace_id = r.workspace_id \
          WHERE r.workspace_id = $1 AND r.target_id = $2 \
@@ -433,6 +438,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -445,6 +451,7 @@ mod tests {
                 entity_type: "project".into(),
                 data: json!({ "title": "Q3 roadmap" }),
             },
+            None,
         )
         .await
         .unwrap();

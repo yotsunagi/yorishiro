@@ -15,7 +15,16 @@ const KEY_SECRET_BYTES: usize = 24;
 /// depends on this exact ordering. The `serde` representation matches the DB `scope` column
 /// ('read'/'write'/'schema'), so REST/MCP adapters don't need a separate mapping.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum ApiKeyScope {

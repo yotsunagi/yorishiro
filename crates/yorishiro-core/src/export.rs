@@ -108,6 +108,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "a" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -119,6 +120,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "b" }),
             },
+            None,
         )
         .await
         .unwrap();

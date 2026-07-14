@@ -60,7 +60,8 @@ pub async fn create_entity(
         entity_type: body.entity_type,
         data: body.data,
     };
-    let record = entities::create(authorized.conn(), workspace_id, input).await?;
+    let created_by = authorized.ctx.user_id;
+    let record = entities::create(authorized.conn(), workspace_id, input, created_by).await?;
     state.spawn_embedding_sync(authorized.ctx.tenant_id, workspace_id, record.clone());
     Ok((StatusCode::CREATED, Json(record)))
 }
@@ -107,7 +108,9 @@ pub async fn update_entity(
     Json(body): Json<UpdateEntityRequest>,
 ) -> Result<Json<EntityRecord>, ApiError> {
     let workspace_id = authorized.ctx.workspace_id;
-    let record = entities::update(authorized.conn(), workspace_id, id, body.data).await?;
+    let updated_by = authorized.ctx.user_id;
+    let record =
+        entities::update(authorized.conn(), workspace_id, id, body.data, updated_by).await?;
     state.spawn_embedding_sync(authorized.ctx.tenant_id, workspace_id, record.clone());
     Ok(Json(record))
 }

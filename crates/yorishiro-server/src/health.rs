@@ -94,7 +94,8 @@ mod tests {
 
     async fn get_response(pool: PgPool, uri: &str) -> axum::response::Response {
         let state = AppState::new(
-            TenantDb::new(pool),
+            TenantDb::new(pool.clone()),
+            pool,
             std::sync::Arc::new(UnreachableEmbeddingProvider),
         );
         let app = build_app(state);

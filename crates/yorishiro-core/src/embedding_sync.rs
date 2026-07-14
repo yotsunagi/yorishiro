@@ -250,6 +250,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report", "priority": 1 }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -305,6 +306,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -347,6 +349,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "no embedding here" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -451,6 +454,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -495,6 +499,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "will be deleted" }),
             },
+            None,
         )
         .await
         .unwrap();

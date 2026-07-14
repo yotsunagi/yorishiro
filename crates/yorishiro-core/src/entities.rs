@@ -23,10 +23,14 @@ enum Entities {
     Data,
     CreatedAt,
     UpdatedAt,
+    CreatedBy,
+    UpdatedBy,
 }
 
 /// A row in the `entities` table. `embedding` is managed separately by the
-/// search/embedding pipeline, so this module's CRUD doesn't touch it.
+/// search/embedding pipeline, so this module's CRUD doesn't touch it. `created_by`/
+/// `updated_by` are `None` for entities touched by an unattributed (service/automation) API
+/// key, since there's no user to record.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct EntityRecord {
     pub id: Uuid,
@@ -38,6 +42,8 @@ pub struct EntityRecord {
     pub data: Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub created_by: Option<Uuid>,
+    pub updated_by: Option<Uuid>,
 }
 
 pub struct CreateEntityInput {
@@ -173,10 +179,13 @@ async fn check_entity_quota(
 
 /// Creates a new entity: resolves the schema name to its currently active schema, checks
 /// that the entity_type exists in that version, validates `data`, and persists the result.
+/// `created_by` is the acting user's ID (from `AuthContext::user_id`), or `None` for an
+/// unattributed service/automation API key.
 pub async fn create(
     conn: &mut PgConnection,
     workspace_id: Uuid,
     input: CreateEntityInput,
+    created_by: Option<Uuid>,
 ) -> Result<EntityRecord, YorishiroError> {
     check_entity_quota(conn, workspace_id).await?;
     let schema = schemas::get_active_schema(conn, workspace_id, &input.schema_name).await?;
@@ -191,6 +200,7 @@ pub async fn create(
             Entities::SchemaVersion,
             Entities::EntityType,
             Entities::Data,
+            Entities::CreatedBy,
         ])
         .values_panic([
             workspace_id.into(),
@@ -198,6 +208,7 @@ pub async fn create(
             schema.version.into(),
             input.entity_type.into(),
             input.data.into(),
+            created_by.into(),
         ])
         .returning(Query::returning().columns([
             Entities::Id,
@@ -208,6 +219,8 @@ pub async fn create(
             Entities::Data,
             Entities::CreatedAt,
             Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
         ]))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -232,6 +245,8 @@ pub async fn get(
             Entities::Data,
             Entities::CreatedAt,
             Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
         ])
         .from((Alias::new("content"), Entities::Table))
         .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
@@ -251,11 +266,14 @@ pub async fn get(
 /// version the entity was actually created with (i.e. the row `entities.schema_id` points
 /// to), so existing entities don't silently break compatibility even if the active version
 /// has since moved on.
+/// `updated_by` is the acting user's ID, or `None` for an unattributed service/automation
+/// API key -- this overwrites whatever `updated_by` the previous update (if any) left behind.
 pub async fn update(
     conn: &mut PgConnection,
     workspace_id: Uuid,
     id: Uuid,
     data: Value,
+    updated_by: Option<Uuid>,
 ) -> Result<EntityRecord, YorishiroError> {
     let existing = get(conn, workspace_id, id).await?;
     let schema = schemas::get_by_id(conn, workspace_id, existing.schema_id).await?;
@@ -266,6 +284,7 @@ pub async fn update(
         .table((Alias::new("content"), Entities::Table))
         .value(Entities::Data, data)
         .value(Entities::UpdatedAt, Expr::cust("now()"))
+        .value(Entities::UpdatedBy, updated_by)
         .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
         .and_where(Expr::col(Entities::Id).eq(id))
         .returning(Query::returning().columns([
@@ -277,6 +296,8 @@ pub async fn update(
             Entities::Data,
             Entities::CreatedAt,
             Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
         ]))
         .build_sqlx(PostgresQueryBuilder);
 
@@ -333,6 +354,8 @@ pub async fn list(
             Entities::Data,
             Entities::CreatedAt,
             Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
         ])
         .from((Alias::new("content"), Entities::Table))
         .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id));
@@ -360,7 +383,8 @@ pub async fn export_all(
     workspace_id: Uuid,
 ) -> Result<Vec<EntityRecord>, YorishiroError> {
     sqlx::query_as::<_, EntityRecord>(
-        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, updated_at \
+        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, \
+         updated_at, created_by, updated_by \
          FROM content.entities WHERE workspace_id = $1 ORDER BY created_at",
     )
     .bind(workspace_id)
@@ -456,6 +480,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "buy milk" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -487,6 +512,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({}),
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -514,6 +540,7 @@ mod tests {
                 entity_type: "nonexistent".into(),
                 data: json!({}),
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -542,6 +569,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "tenant a task" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -574,6 +602,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "v1 task" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -599,6 +628,7 @@ mod tests {
             workspace_id,
             entity.id,
             json!({ "title": "v1 task updated" }),
+            None,
         )
         .await
         .unwrap();
@@ -625,6 +655,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "to delete" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -670,6 +701,7 @@ mod tests {
                     entity_type: entity_type.into(),
                     data: json!({ "title": title }),
                 },
+                None,
             )
             .await
             .unwrap();
@@ -716,6 +748,7 @@ mod tests {
                     entity_type: "task".into(),
                     data: json!({ "title": title, "status": status }),
                 },
+                None,
             )
             .await
             .unwrap();

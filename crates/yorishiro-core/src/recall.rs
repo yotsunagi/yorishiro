@@ -165,6 +165,7 @@ mod tests {
                 entity_type: "project".into(),
                 data: json!({ "title": "Q3 roadmap" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -176,6 +177,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report", "note": "internal only" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -232,6 +234,7 @@ mod tests {
                 entity_type: "project".into(),
                 data: json!({ "title": "Q3 roadmap" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -243,6 +246,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report", "note": "internal only" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -293,6 +297,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "write report" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -306,6 +311,7 @@ mod tests {
                     entity_type: "project".into(),
                     data: json!({ "title": name }),
                 },
+                None,
             )
             .await
             .unwrap();

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::extract::FromRef;
+use sqlx::PgPool;
 use tokio::sync::Semaphore;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
@@ -23,15 +24,28 @@ const EMBEDDING_SYNC_MAX_CONCURRENCY: usize = 4;
 #[derive(Clone)]
 pub struct AppState {
     pub tenant_db: TenantDb,
+    /// A connection pool using the admin/migration role (not `yorishiro_app`), reserved for
+    /// the handful of control-plane endpoints (signup, login, invite redemption) that must
+    /// read/write `identity.users`/`identity.tenant_memberships`/`identity.invites` before any
+    /// tenant or workspace context can be established -- the same role `admin.rs`'s CLI
+    /// commands already use, for the same reason (see the role-separation migration's comment
+    /// on why `yorishiro_app` has no grant on those tables at all). Every other handler must
+    /// keep using `tenant_db` instead: this pool bypasses RLS entirely.
+    pub identity_pool: PgPool,
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
     embedding_sync_permits: Arc<Semaphore>,
     embedding_tasks: TaskTracker,
 }
 
 impl AppState {
-    pub fn new(tenant_db: TenantDb, embedding_provider: Arc<dyn EmbeddingProvider>) -> Self {
+    pub fn new(
+        tenant_db: TenantDb,
+        identity_pool: PgPool,
+        embedding_provider: Arc<dyn EmbeddingProvider>,
+    ) -> Self {
         Self {
             tenant_db,
+            identity_pool,
             embedding_provider,
             embedding_sync_permits: Arc::new(Semaphore::new(EMBEDDING_SYNC_MAX_CONCURRENCY)),
             embedding_tasks: TaskTracker::new(),

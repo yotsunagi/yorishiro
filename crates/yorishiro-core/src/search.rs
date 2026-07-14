@@ -47,6 +47,8 @@ struct SearchRow {
     data: Value,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    created_by: Option<Uuid>,
+    updated_by: Option<Uuid>,
     distance: Option<f64>,
 }
 
@@ -62,6 +64,8 @@ impl SearchRow {
                 data: self.data,
                 created_at: self.created_at,
                 updated_at: self.updated_at,
+                created_by: self.created_by,
+                updated_by: self.updated_by,
             },
             distance: self.distance,
         }
@@ -97,6 +101,7 @@ pub async fn search_by_vector(
 
     let rows = sqlx::query_as::<_, SearchRow>(
         "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, updated_at, \
+                created_by, updated_by, \
                 embedding <=> $1 AS distance \
          FROM content.entities \
          WHERE workspace_id = $2 \
@@ -233,6 +238,7 @@ mod tests {
                 entity_type: entity_type.into(),
                 data: json!({ "title": title }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -374,6 +380,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "never embedded" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -414,6 +421,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: json!({ "title": "widget assembly line status" }),
             },
+            None,
         )
         .await
         .unwrap();
@@ -459,6 +467,7 @@ mod tests {
             workspace_id,
             active.id,
             json!({ "title": "active one", "status": "active" }),
+            None,
         )
         .await
         .unwrap();
@@ -469,6 +478,7 @@ mod tests {
             workspace_id,
             done.id,
             json!({ "title": "done one", "status": "done" }),
+            None,
         )
         .await
         .unwrap();

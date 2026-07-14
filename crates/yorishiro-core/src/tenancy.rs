@@ -7,8 +7,10 @@
 use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use rand::Rng;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ pub struct TenantRecord {
     pub name: String,
     pub plan: Option<String>,
     pub max_workspaces: Option<i32>,
+    pub stripe_customer_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -43,7 +46,7 @@ pub struct UserRecord {
 
 /// Mirrors the `identity.tenant_memberships.role` check constraint
 /// (`owner`/`admin`/`member`/`viewer`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MembershipRole {
     Owner,
@@ -84,7 +87,7 @@ impl MembershipRole {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MembershipRecord {
     pub user_id: Uuid,
     pub email: String,
@@ -92,14 +95,62 @@ pub struct MembershipRecord {
     pub role: MembershipRole,
 }
 
+/// Creates a tenant, enforcing the system-wide tenant cap from `YORISHIRO_MAX_TENANTS` (unset
+/// means unlimited). This is a deployment-wide limit rather than a per-tenant column, since it
+/// bounds the community edition to a single tenant without needing a settings table: operators
+/// set `YORISHIRO_MAX_TENANTS=1` for a self-hosted, single-tenant deployment and leave it unset
+/// for a hosted deployment. It is enforced only in application code (there is no anti-tampering
+/// against an operator who edits the source or the env var directly) — like the rest of this
+/// module's caps, it exists for product consistency, not as a security boundary against whoever
+/// controls the deployment.
 pub async fn create_tenant(
     pool: &PgPool,
     name: &str,
     max_workspaces: Option<i32>,
 ) -> Result<TenantRecord, YorishiroError> {
+    create_tenant_with_cap(pool, name, max_workspaces, max_tenants_from_env()?).await
+}
+
+/// Reads and parses `YORISHIRO_MAX_TENANTS`. Unset means unlimited; a non-integer value is a
+/// misconfiguration and fails loudly rather than silently falling back to unlimited.
+fn max_tenants_from_env() -> Result<Option<i32>, YorishiroError> {
+    match std::env::var("YORISHIRO_MAX_TENANTS") {
+        Ok(raw) => raw.parse::<i32>().map(Some).map_err(|_| {
+            YorishiroError::Internal(anyhow::anyhow!(
+                "YORISHIRO_MAX_TENANTS must be an integer, got '{raw}'"
+            ))
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Cap-checking logic factored out of `create_tenant` so tests can exercise it without mutating
+/// the process-wide `YORISHIRO_MAX_TENANTS` env var (which would race against other tests running
+/// concurrently in the same test binary).
+async fn create_tenant_with_cap(
+    pool: &PgPool,
+    name: &str,
+    max_workspaces: Option<i32>,
+    max_tenants: Option<i32>,
+) -> Result<TenantRecord, YorishiroError> {
+    if let Some(max) = max_tenants {
+        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM identity.tenants")
+            .fetch_one(pool)
+            .await
+            .map_err(|err| YorishiroError::Internal(err.into()))?;
+        if count >= i64::from(max) {
+            return Err(YorishiroError::Conflict {
+                message: format!(
+                    "this deployment has reached its tenant limit ({max}, set via \
+                     YORISHIRO_MAX_TENANTS); raise or unset that variable to create another tenant"
+                ),
+            });
+        }
+    }
+
     sqlx::query_as::<_, TenantRecord>(
         "INSERT INTO identity.tenants (name, max_workspaces) VALUES ($1, $2) \
-         RETURNING id, name, plan, max_workspaces, created_at",
+         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
     )
     .bind(name)
     .bind(max_workspaces)
@@ -110,7 +161,8 @@ pub async fn create_tenant(
 
 pub async fn get_tenant(pool: &PgPool, tenant_id: Uuid) -> Result<TenantRecord, YorishiroError> {
     sqlx::query_as::<_, TenantRecord>(
-        "SELECT id, name, plan, max_workspaces, created_at FROM identity.tenants WHERE id = $1",
+        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
+         FROM identity.tenants WHERE id = $1",
     )
     .bind(tenant_id)
     .fetch_optional(pool)
@@ -123,9 +175,71 @@ pub async fn get_tenant(pool: &PgPool, tenant_id: Uuid) -> Result<TenantRecord, 
 
 pub async fn list_tenants(pool: &PgPool) -> Result<Vec<TenantRecord>, YorishiroError> {
     sqlx::query_as::<_, TenantRecord>(
-        "SELECT id, name, plan, max_workspaces, created_at FROM identity.tenants ORDER BY created_at",
+        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
+         FROM identity.tenants ORDER BY created_at",
     )
     .fetch_all(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Updates a tenant's billing plan and `max_workspaces` cap together, since the two always
+/// change in lockstep when a subscription changes tier (see `yorishiro-hosted`'s plan-to-cap
+/// mapping). Existing workspaces' own `max_entities` are left untouched -- only newly created
+/// workspaces pick up a plan's default cap.
+pub async fn set_tenant_plan(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    plan: &str,
+    max_workspaces: Option<i32>,
+) -> Result<TenantRecord, YorishiroError> {
+    sqlx::query_as::<_, TenantRecord>(
+        "UPDATE identity.tenants SET plan = $2, max_workspaces = $3 WHERE id = $1 \
+         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
+    )
+    .bind(tenant_id)
+    .bind(plan)
+    .bind(max_workspaces)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?
+    .ok_or_else(|| YorishiroError::NotFound {
+        message: format!("tenant '{tenant_id}' was not found"),
+    })
+}
+
+/// Records the Stripe customer id created for a tenant at checkout time, so later webhook
+/// events (subscription updated/deleted) -- which only carry the Stripe customer id -- can be
+/// routed back to this tenant via `get_tenant_by_stripe_customer`.
+pub async fn link_stripe_customer(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    stripe_customer_id: &str,
+) -> Result<TenantRecord, YorishiroError> {
+    sqlx::query_as::<_, TenantRecord>(
+        "UPDATE identity.tenants SET stripe_customer_id = $2 WHERE id = $1 \
+         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
+    )
+    .bind(tenant_id)
+    .bind(stripe_customer_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?
+    .ok_or_else(|| YorishiroError::NotFound {
+        message: format!("tenant '{tenant_id}' was not found"),
+    })
+}
+
+pub async fn get_tenant_by_stripe_customer(
+    pool: &PgPool,
+    stripe_customer_id: &str,
+) -> Result<Option<TenantRecord>, YorishiroError> {
+    sqlx::query_as::<_, TenantRecord>(
+        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
+         FROM identity.tenants WHERE stripe_customer_id = $1",
+    )
+    .bind(stripe_customer_id)
+    .fetch_optional(pool)
     .await
     .map_err(|err| YorishiroError::Internal(err.into()))
 }
@@ -184,6 +298,23 @@ pub async fn list_workspaces(
     .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
+pub async fn get_workspace(
+    pool: &PgPool,
+    workspace_id: Uuid,
+) -> Result<WorkspaceRecord, YorishiroError> {
+    sqlx::query_as::<_, WorkspaceRecord>(
+        "SELECT id, tenant_id, name, max_entities, created_at FROM identity.workspaces \
+         WHERE id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?
+    .ok_or_else(|| YorishiroError::NotFound {
+        message: format!("workspace '{workspace_id}' was not found"),
+    })
+}
+
 fn hash_password(password: &str) -> Result<String, YorishiroError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -232,10 +363,24 @@ pub async fn create_user(
     })
 }
 
+/// Looks up an existing user by email, without touching their password hash. Used by member
+/// management (adding an *existing* account to another tenant) to resolve an email to a
+/// `user_id` before calling `add_member` -- as opposed to signup, which creates the account.
+pub async fn get_user_by_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<Option<UserRecord>, YorishiroError> {
+    sqlx::query_as::<_, UserRecord>(
+        "SELECT id, email, display_name, created_at FROM identity.users WHERE email = $1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
 /// Verifies an email/password pair against the stored argon2 hash, returning the matching
-/// user on success. Not yet wired to an HTTP endpoint (this server is driven by API keys, not
-/// interactive sessions) but kept alongside `create_user` so an eventual login flow can reuse
-/// the same password storage/verification path rather than inventing a second one.
+/// user on success. Backs the `/auth/login` REST endpoint.
 pub async fn verify_login(
     pool: &PgPool,
     email: &str,
@@ -362,6 +507,116 @@ pub async fn list_members(
         .collect()
 }
 
+const INVITE_TOKEN_BYTES: usize = 24;
+
+fn random_invite_token() -> String {
+    let mut bytes = [0u8; INVITE_TOKEN_BYTES];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hash_invite_token(raw: &str) -> Vec<u8> {
+    Sha256::digest(raw.as_bytes()).to_vec()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InviteRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub email: String,
+    pub role: MembershipRole,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct InviteRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    email: String,
+    role: String,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl InviteRow {
+    fn into_record(self) -> Result<InviteRecord, YorishiroError> {
+        let role = MembershipRole::from_db_str(&self.role).ok_or_else(|| {
+            YorishiroError::Internal(anyhow::anyhow!(
+                "unknown membership role in database: {}",
+                self.role
+            ))
+        })?;
+        Ok(InviteRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            email: self.email,
+            role,
+            expires_at: self.expires_at,
+            created_at: self.created_at,
+        })
+    }
+}
+
+/// Creates an invite token for `email` to join `tenant_id` with `role`. Returns the record
+/// alongside the plaintext token: like API keys, only its SHA-256 hash is persisted (a KDF
+/// like argon2 isn't needed here either, for the same reason -- the token already carries
+/// enough entropy that offline brute-forcing isn't realistic), so this is the only place the
+/// plaintext is ever available. Callers must surface it themselves (e.g. print it, or send it
+/// by email once a transactional-email integration exists).
+pub async fn create_invite(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    email: &str,
+    role: MembershipRole,
+    ttl: Duration,
+) -> Result<(InviteRecord, String), YorishiroError> {
+    get_tenant(pool, tenant_id).await?;
+
+    let token = random_invite_token();
+    let token_hash = hash_invite_token(&token);
+    let expires_at = Utc::now() + ttl;
+
+    let row: InviteRow = sqlx::query_as(
+        "INSERT INTO identity.invites (tenant_id, email, role, token_hash, expires_at) \
+         VALUES ($1, $2, $3, $4, $5) \
+         RETURNING id, tenant_id, email, role, expires_at, created_at",
+    )
+    .bind(tenant_id)
+    .bind(email)
+    .bind(role.as_db_str())
+    .bind(token_hash)
+    .bind(expires_at)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    Ok((row.into_record()?, token))
+}
+
+/// Redeems an invite token: atomically marks it used and returns the tenant/email/role it
+/// grants, or `None` if the token doesn't match any invite, is already used, or has expired.
+/// The lookup and the `used_at` update happen in a single statement so two concurrent
+/// redemptions of the same token can't both succeed.
+pub async fn redeem_invite(
+    pool: &PgPool,
+    raw_token: &str,
+) -> Result<Option<InviteRecord>, YorishiroError> {
+    let token_hash = hash_invite_token(raw_token);
+
+    let row: Option<InviteRow> = sqlx::query_as(
+        "UPDATE identity.invites SET used_at = now() \
+         WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() \
+         RETURNING id, tenant_id, email, role, expires_at, created_at",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    row.map(InviteRow::into_record).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
@@ -392,6 +647,28 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, YorishiroError::Conflict { .. }));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enforces_system_wide_tenant_cap(pool: PgPool) {
+        create_tenant_with_cap(&pool, "first", None, Some(1))
+            .await
+            .unwrap();
+
+        let err = create_tenant_with_cap(&pool, "second", None, Some(1))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, YorishiroError::Conflict { .. }));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unset_tenant_cap_is_unlimited(pool: PgPool) {
+        create_tenant_with_cap(&pool, "first", None, None)
+            .await
+            .unwrap();
+        create_tenant_with_cap(&pool, "second", None, None)
+            .await
+            .unwrap();
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -504,6 +781,71 @@ mod tests {
         let err = add_member(&pool, Uuid::nil(), user.id, MembershipRole::Member)
             .await
             .unwrap_err();
+        assert!(matches!(err, YorishiroError::NotFound { .. }));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn creates_and_redeems_an_invite(pool: PgPool) {
+        let tenant = create_tenant(&pool, "team", None).await.unwrap();
+
+        let (invite, token) = create_invite(
+            &pool,
+            tenant.id,
+            "frank@example.com",
+            MembershipRole::Member,
+            Duration::hours(24),
+        )
+        .await
+        .unwrap();
+        assert_eq!(invite.tenant_id, tenant.id);
+        assert_eq!(invite.email, "frank@example.com");
+        assert_eq!(invite.role, MembershipRole::Member);
+
+        let redeemed = redeem_invite(&pool, &token).await.unwrap().unwrap();
+        assert_eq!(redeemed.id, invite.id);
+        assert_eq!(redeemed.tenant_id, tenant.id);
+        assert_eq!(redeemed.role, MembershipRole::Member);
+
+        // A token can only be redeemed once.
+        let second_attempt = redeem_invite(&pool, &token).await.unwrap();
+        assert!(second_attempt.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn redeem_invite_rejects_unknown_or_garbled_tokens(pool: PgPool) {
+        let result = redeem_invite(&pool, "not-a-real-token").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn redeem_invite_rejects_an_expired_token(pool: PgPool) {
+        let tenant = create_tenant(&pool, "team", None).await.unwrap();
+
+        let (_invite, token) = create_invite(
+            &pool,
+            tenant.id,
+            "grace@example.com",
+            MembershipRole::Viewer,
+            Duration::hours(-1),
+        )
+        .await
+        .unwrap();
+
+        let result = redeem_invite(&pool, &token).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_invite_rejects_unknown_tenant(pool: PgPool) {
+        let err = create_invite(
+            &pool,
+            Uuid::nil(),
+            "nobody@example.com",
+            MembershipRole::Member,
+            Duration::hours(24),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, YorishiroError::NotFound { .. }));
     }
 }

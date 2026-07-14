@@ -45,6 +45,16 @@ pub enum AdminCommand {
     },
     /// List a tenant's members.
     ListMembers { tenant_id: Uuid },
+    /// Create an invite token for an email to join a tenant with a given role. Signup is
+    /// invite-only; there is no self-service, unauthenticated account creation.
+    CreateInvite {
+        tenant_id: Uuid,
+        email: String,
+        role: RoleArg,
+        /// How long the invite stays redeemable. Defaults to 7 days.
+        #[arg(long, default_value_t = 168)]
+        ttl_hours: i64,
+    },
     /// Issue a new API key for a workspace (see `admin list-workspaces <tenant-id>` for the
     /// workspace ID).
     CreateApiKey {
@@ -205,6 +215,32 @@ pub async fn run(command: AdminCommand) -> Result<()> {
             for member in members {
                 println!("{}  {:<8?} {}", member.user_id, member.role, member.email);
             }
+        }
+        AdminCommand::CreateInvite {
+            tenant_id,
+            email,
+            role,
+            ttl_hours,
+        } => {
+            let (invite, token) = tenancy::create_invite(
+                &pool,
+                tenant_id,
+                &email,
+                role.into(),
+                chrono::Duration::hours(ttl_hours),
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+            println!("invite created (the plaintext token is shown ONLY once — send it now)");
+            println!("  token:      {token}");
+            println!("  invite id:  {}", invite.id);
+            println!("  tenant id:  {}", invite.tenant_id);
+            println!("  email:      {}", invite.email);
+            println!("  role:       {:?}", invite.role);
+            println!(
+                "  expires at: {}",
+                invite.expires_at.format("%Y-%m-%d %H:%M UTC")
+            );
         }
         AdminCommand::CreateApiKey {
             workspace_id,
@@ -547,6 +583,7 @@ mod tests {
                 entity_type: "task".into(),
                 data: serde_json::json!({ "title": "orphaned" }),
             },
+            None,
         )
         .await
         .unwrap();
