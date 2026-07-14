@@ -187,9 +187,9 @@ fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
 /// The routing configuration itself needs to be identical between `main` and the
 /// integration tests, so it's factored into a function that builds the app from just an
 /// `AppState`. `web_dir`, when set, serves a static SPA (see `web/`) as the fallback for any
-/// path not matched by an API route -- this is how the community edition's first-run setup
-/// wizard and the hosted dashboard's static assets share the same `web/` tree while each
-/// process opts in independently (`YSR_WEB_DIR` here vs. `YORISHIRO_HOSTED_WEB_DIR` in
+/// path not matched by an API route -- this is how this process's first-run setup wizard and
+/// the hosted dashboard's static assets share the same `web/` tree while each process opts in
+/// independently (`YSR_WEB_DIR` here vs. `YORISHIRO_HOSTED_WEB_DIR` in
 /// `yorishiro-hosted-server`).
 fn build_app(state: AppState, web_dir: Option<String>) -> Router {
     let cors = build_cors_layer();

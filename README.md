@@ -46,38 +46,20 @@ flowchart TD
   (`yorishiro_app`, without `BYPASSRLS`), and control-plane tables
   (`identity.tenants`/`identity.users`/`identity.tenant_memberships`) aren't reachable by
   that role at all — only the admin CLI, running as the migration role, can manage them.
-- **Billing-ready quotas**: a tenant's `max_workspaces` and a workspace's `max_entities` are
-  enforced at creation time (workspace creation / entity creation, respectively). Both
-  default to `NULL` (unlimited), which is the right default for self-hosted deployments; a
-  hosted offering can set explicit caps per plan.
+- **Quotas**: a tenant's `max_workspaces` and a workspace's `max_entities` are enforced at
+  creation time (workspace creation / entity creation, respectively). Both default to `NULL`
+  (unlimited); an operator can set explicit caps per tenant/workspace.
 - **Schema versioning**: Re-registering a schema with the same name adds a new version;
   breaking changes (removed fields, type changes, newly required fields, etc.) are reported
   as a diff. Existing entities continue to be validated against the schema version that was
   active when they were created.
-- **Community / hosted split**: everything above ships in the single `yorishiro-server`
-  binary (the community edition) and is all a self-hosted operator needs — set
+- **Single binary**: everything above ships in the single `yorishiro-server` binary — set
   `YORISHIRO_MAX_TENANTS=1` to keep it single-tenant. The same setting also enables a
   first-run setup wizard (browser UI at `/`, or `POST /setup`) that creates the tenant,
   workspace, and owner account in one step — no admin CLI needed. Beyond that first account,
   further account creation is invite-only (`admin create-invite` → `POST /auth/signup` →
   `POST /auth/login`), and tenant owners/admins can manage members over REST (`/api/members`)
-  without touching the admin CLI. Stripe billing, usage metering, and the admin dashboard SPA
-  are hosted-only concerns, developed as a separate product in a private repository
-  (`yotsunagi/yorishiro-enterprise`) so they never ship as part of, or add attack surface to,
-  the community edition — see [docs/deployment.md](docs/deployment.md#hosted-deployment).
-
-## Community edition vs. hosted edition
-
-| | Community (self-hosted) | Hosted |
-|---|---|---|
-| Source | This repository (public) | `yotsunagi/yorishiro-enterprise` (private) |
-| Tenants | 1 (`YORISHIRO_MAX_TENANTS=1`) | Unlimited |
-| Users per tenant | Unlimited | Unlimited |
-| Billing | None | Stripe webhook + plan caps ([docs/deployment.md](docs/deployment.md#hosted-deployment)) |
-| Admin dashboard SPA | Not included (a separate hosted-only process serves it) | Included |
-
-Signup/login and `/api/members` are part of the core `yorishiro-server` API either way — the
-hosted edition only adds billing and the dashboard on top.
+  without touching the admin CLI.
 
 ## Quick start
 

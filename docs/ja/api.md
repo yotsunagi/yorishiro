@@ -58,14 +58,6 @@ $ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
 しません（それはサインアップの役割です）。両メンバー管理エンドポイントとも、キー自身のscope
 とは独立に、呼び出し元のテナントrole（owner/admin）で制御されます。
 
-### ホスティング版限定のエンドポイント
-
-ホスティング版のデプロイでは別プロセス（`yorishiro-hosted-server`、
-[deployment.md](deployment.md#ホスティング版のデプロイ)参照）が動作し、
-`POST /hosted/stripe/webhook`（Stripeサブスクリプション Webhook）と
-`GET /hosted/tenant/overview`（管理ダッシュボードSPAを支える課金/使用量/メンバーデータ）を
-公開します。セルフホスト版はこのプロセスを一切実行しないため、これらのパスは存在しません。
-
 ## MCPツール
 
 `/mcp`（Streamable HTTP）に接続すると17のツールが使えます。Claude Codeでの接続例:

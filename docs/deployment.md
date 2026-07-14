@@ -36,20 +36,8 @@ QEMU), matching the `ort`/onnxruntime build requirements above.
 $ git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-## Hosted deployment
+## Single-tenant mode
 
-Everything above is all a self-hosted (community) deployment needs — set
-`YORISHIRO_MAX_TENANTS=1` and `YSR_WEB_DIR=web` (see [configuration.md](configuration.md)) and
-stop there; this serves the [`web/`](../web) SPA, whose setup wizard (see
-[setup.md](setup.md#first-run-setup-community-edition)) is enough to onboard a community
-deployment's one tenant without any hosted-only dashboard views.
-
-The hosted (multi-tenant, billed) edition — Stripe subscription webhooks, plan/usage
-metering, and the admin dashboard SPA — is a separate product built as a second process,
-`yorishiro-hosted-server`, that runs against this same `yorishiro-server` API and database.
-It is developed and distributed from a private repository
-(`yotsunagi/yorishiro-enterprise`), not from this one, to keep billing logic and commercial
-plan/pricing details out of the community edition's source tree. See that repository's own
-documentation for its deployment instructions; the endpoints it exposes on top of this API
-(`POST /hosted/stripe/webhook`, `GET /hosted/tenant/overview`) are documented in
-[api.md](api.md#hosted-only-endpoints) for reference.
+Set `YORISHIRO_MAX_TENANTS=1` and `YSR_WEB_DIR=web` (see [configuration.md](configuration.md))
+to serve the [`web/`](../web) SPA, whose setup wizard (see
+[setup.md](setup.md#first-run-setup)) is enough to onboard the deployment's one tenant.

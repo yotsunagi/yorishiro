@@ -97,9 +97,9 @@ pub struct MembershipRecord {
 
 /// Creates a tenant, enforcing the system-wide tenant cap from `YORISHIRO_MAX_TENANTS` (unset
 /// means unlimited). This is a deployment-wide limit rather than a per-tenant column, since it
-/// bounds the community edition to a single tenant without needing a settings table: operators
+/// bounds a deployment to a single tenant without needing a settings table: operators
 /// set `YORISHIRO_MAX_TENANTS=1` for a self-hosted, single-tenant deployment and leave it unset
-/// for a hosted deployment. It is enforced only in application code (there is no anti-tampering
+/// to allow multiple tenants. It is enforced only in application code (there is no anti-tampering
 /// against an operator who edits the source or the env var directly) — like the rest of this
 /// module's caps, it exists for product consistency, not as a security boundary against whoever
 /// controls the deployment.

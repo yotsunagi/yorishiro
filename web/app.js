@@ -1,10 +1,10 @@
 // Yorishiro admin dashboard -- a deliberately framework-free SPA. Scope is limited to first-run
 // setup, login, usage/billing display, and member management; it is not a general
 // entity/schema/relation browser -- that's what the REST API + Swagger UI (`/docs` on
-// yorishiro-server) are for. Served by both yorishiro-server (community edition, via
-// `YSR_WEB_DIR`) and yorishiro-hosted-server -- `/hosted/tenant/overview` and friends only exist
-// on the latter, so the community edition never reaches `#/dashboard` in practice; it stops at
-// the setup-complete screen instead.
+// yorishiro-server) are for. Served by both yorishiro-server (via `YSR_WEB_DIR`) and
+// yorishiro-hosted-server -- `/hosted/tenant/overview` and friends only exist on the latter, so
+// yorishiro-server alone never reaches `#/dashboard` in practice; it stops at the setup-complete
+// screen instead.
 
 const SESSION_KEY = "yorishiro_session";
 

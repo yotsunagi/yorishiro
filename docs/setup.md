@@ -37,9 +37,9 @@ Migrations are applied automatically on startup. Endpoints:
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
 | `http://localhost:8080/whoami` | Authentication check (returns workspace, tenant, and scope) |
 
-## First-run setup (community edition)
+## First-run setup
 
-Community-edition deployments (`YORISHIRO_MAX_TENANTS` set — `docker-compose.yml`'s `app`
+Deployments with `YORISHIRO_MAX_TENANTS` set (`docker-compose.yml`'s `app`
 service does this and also sets `YSR_WEB_DIR=web`) serve a setup wizard at
 `http://localhost:8080/` — no admin CLI needed. On first visit, since no tenant exists yet,
 the browser shows a form asking only for an email and password; submitting it creates the
@@ -84,17 +84,17 @@ whoever holds `DATABASE_URL`); day-to-day *membership* management (inviting/addi
 members) is available to tenant owners/admins over REST — see
 [Signup, login, and member management](#signup-login-and-member-management).
 
-By default, a deployment may create any number of tenants. Self-hosted (community)
-deployments should set `YORISHIRO_MAX_TENANTS=1` (see
+By default, a deployment may create any number of tenants. Single-tenant deployments
+should set `YORISHIRO_MAX_TENANTS=1` (see
 [configuration.md](configuration.md)) so `admin create-tenant` and the signup flow below
-can never create a second one; leave it unset for a hosted deployment serving many tenants.
+can never create a second one; leave it unset to allow multiple tenants.
 
 ## Provisioning tenants, workspaces, and API keys
 
-Community-edition deployments can skip this section and use the setup wizard above instead
-for their first (and, per `YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to
-provision *additional* tenants/workspaces, and the only way to provision anything at all on a
-hosted deployment (`YORISHIRO_MAX_TENANTS` unset).
+Deployments that used the setup wizard above can skip this section for their first (and, per
+`YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to provision *additional*
+tenants/workspaces, and the only way to provision anything at all when
+`YORISHIRO_MAX_TENANTS` is unset.
 
 API keys are stored in the database only as SHA-256 hashes and user passwords only as
 argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:
@@ -229,6 +229,3 @@ email/password to obtain API keys, rather than being handed one out of band.
    yet, issue them an invite (step 1) instead. Both endpoints require the caller's own key to
    be attributed to an Owner/Admin member — a Member-role key is rejected with 403 regardless
    of its own scope, since membership management is a tenant-role concern, not a scope one.
-
-A hosted deployment's admin dashboard SPA wraps steps 3 and 4 in a browser UI — see
-[deployment.md](deployment.md#hosted-deployment).

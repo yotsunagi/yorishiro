@@ -59,14 +59,6 @@ $ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
 one (that's what signup does). Both member-management endpoints are gated on the caller's
 tenant role (owner/admin), independent of their key's own scope.
 
-### Hosted-only endpoints
-
-A hosted deployment runs a second process (`yorishiro-hosted-server`, see
-[deployment.md](deployment.md#hosted-deployment)) exposing `POST /hosted/stripe/webhook`
-(Stripe subscription webhook) and `GET /hosted/tenant/overview` (billing/usage/member data
-backing the admin dashboard SPA). Self-hosted deployments never run this process, so these
-paths don't exist there.
-
 ## MCP Tools
 
 Connecting to `/mcp` (Streamable HTTP) gives you access to 17 tools. Example connection
