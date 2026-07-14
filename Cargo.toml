@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/yorishiro-core", "crates/yorishiro-server"]
+members = ["crates/yorishiro-core", "crates/yorishiro-server", "crates/yorishiro-hosted"]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +15,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+hmac = "0.13"
 http = "1"
 jsonschema = "0.47"
 pgvector = { version = "=0.4.1", features = ["sqlx"] }
