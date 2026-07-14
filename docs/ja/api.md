@@ -33,6 +33,39 @@ $ curl "localhost:8080/api/export.jsonl" -H "Authorization: Bearer $YSR_KEY"
 `{"template_id": "..."}`を渡すことで、`GET /api/templates`で一覧取得できる組み込みテンプレートから
 スキーマを登録できます。
 
+### 認証とメンバー管理
+
+他の全エンドポイントと異なり、`/auth/signup`と`/auth/login`はbearerトークンを必要としません
+— これらの目的自体がトークンを発行することだからです。招待からサインアップ・ログインまでの
+一連の流れは[setup.md](setup.md#サインアップログインメンバー管理)を参照してください。
+
+```console
+# 招待（`admin create-invite`参照）を引き換えてアカウントを作成
+$ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
+    -d '{"invite_token":"...","password":"...","display_name":"..."}'
+
+# メールアドレス/パスワードを、新しく発行されたrole上限付きのAPIキーと交換
+$ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
+    -d '{"email":"...","password":"...","workspace_id":"..."}'
+
+# 呼び出し元自身のテナントのメンバーを一覧・追加（owner/adminのみ）
+$ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
+$ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
+    -H "Content-Type: application/json" -d '{"email":"...","role":"member"}'
+```
+
+`POST /api/members`は**既存の**アカウントを呼び出し元のテナントに追加します — 新規作成は
+しません（それはサインアップの役割です）。両メンバー管理エンドポイントとも、キー自身のscope
+とは独立に、呼び出し元のテナントrole（owner/admin）で制御されます。
+
+### ホスティング版限定のエンドポイント
+
+ホスティング版のデプロイでは別プロセス（`yorishiro-hosted-server`、
+[deployment.md](deployment.md#ホスティング版のデプロイ)参照）が動作し、
+`POST /hosted/stripe/webhook`（Stripeサブスクリプション Webhook）と
+`GET /hosted/tenant/overview`（管理ダッシュボードSPAを支える課金/使用量/メンバーデータ）を
+公開します。セルフホスト版はこのプロセスを一切実行しないため、これらのパスは存在しません。
+
 ## MCPツール
 
 `/mcp`（Streamable HTTP）に接続すると17のツールが使えます。Claude Codeでの接続例:

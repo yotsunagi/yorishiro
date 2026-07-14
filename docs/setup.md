@@ -51,8 +51,15 @@ Yorishiro's control plane is two-tiered:
 Splitting tenant from workspace lets one organization run several isolated projects (e.g.
 separate workspaces per environment or team) without provisioning a whole new tenant for
 each, and lets several people share administrative access to the same tenant via
-memberships. None of this is exposed over the REST/MCP API yet — it's managed entirely
-through the admin CLI below, by whoever holds `DATABASE_URL`.
+memberships. Tenant/workspace *creation* is only available through the admin CLI below (by
+whoever holds `DATABASE_URL`); day-to-day *membership* management (inviting/adding/listing
+members) is available to tenant owners/admins over REST — see
+[Signup, login, and member management](#signup-login-and-member-management).
+
+By default, a deployment may create any number of tenants. Self-hosted (community)
+deployments should set `YORISHIRO_MAX_TENANTS=1` (see
+[configuration.md](configuration.md)) so `admin create-tenant` and the signup flow below
+can never create a second one; leave it unset for a hosted deployment serving many tenants.
 
 ## Provisioning tenants, workspaces, and API keys
 
@@ -95,6 +102,7 @@ Other admin commands:
 | `admin create-user <email> <password> [--display-name <name>]` | Create a human user account |
 | `admin add-member <tenant-id> <user-id> <role>` | Add (or change the role of) a user's membership in a tenant (`owner`/`admin`/`member`/`viewer`) |
 | `admin list-members <tenant-id>` | List a tenant's members and their roles |
+| `admin create-invite <tenant-id> <email> <role> [--ttl-hours <n>]` | Issue an invite token for an email to join a tenant (default TTL: 7 days) — see below |
 | `admin create-api-key <workspace-id> <scope> [--user <user-id>]` | Issue an API key, optionally attributed to a member |
 | `admin list-api-keys <workspace-id>` | List keys (ID, scope, prefix, attributed user, last used) |
 | `admin revoke-api-key <key-id>` | Immediately revoke a key (e.g. on leakage) |
@@ -110,15 +118,84 @@ read, and a `schema` key can perform every operation, including schema registrat
 
 ### Attributing keys to users
 
-Since Yorishiro is API-first (there's no login/session flow — every request, human or
-automated, goes through an API key), multi-user access control works by tying a key to a
-member's role rather than by a session. Passing `--user <user-id>` to `create-api-key`
-attributes the key to that member and caps the requested scope at
-`MembershipRole::max_scope()`: `owner`/`admin` may be issued up to `schema`, `member` up to
-`write`, and `viewer` up to `read`. Requesting a scope above that cap, or attributing a key
-to someone who isn't a member of the workspace's tenant, is rejected at issuance time. This
-check runs once, when the key is created — like a key's scope itself, it isn't re-evaluated
-on every request, so revoking a user's membership doesn't retroactively narrow keys already
-issued to them (revoke the key instead). Omit `--user` for unattributed service/automation
-keys, which aren't capped by any role. `GET /whoami` echoes the attributed `user_id` (or
-`null`) alongside the workspace, tenant, and scope.
+Every request, human or automated, is ultimately authenticated by an API key (there's no
+cookie/session state on the server) — but a key can be *attributed* to a human user, and
+multi-user access control works by tying that attribution to the user's tenant role rather
+than by a session. Passing `--user <user-id>` to `create-api-key` attributes the key to that
+member and caps the requested scope at `MembershipRole::max_scope()`: `owner`/`admin` may be
+issued up to `schema`, `member` up to `write`, and `viewer` up to `read`. Requesting a scope
+above that cap, or attributing a key to someone who isn't a member of the workspace's
+tenant, is rejected at issuance time. This check runs once, when the key is created — like a
+key's scope itself, it isn't re-evaluated on every request, so revoking a user's membership
+doesn't retroactively narrow keys already issued to them (revoke the key instead). Omit
+`--user` for unattributed service/automation keys, which aren't capped by any role.
+`GET /whoami` echoes the attributed `user_id` (or `null`) alongside the workspace, tenant,
+and scope.
+
+`POST /auth/login` (below) is the self-service equivalent of `admin create-api-key --user`:
+it authenticates with a password instead of `DATABASE_URL` access, and issues a key already
+capped at the caller's own role.
+
+## Signup, login, and member management
+
+Account creation is invite-only — there is no public, unauthenticated signup. A tenant
+owner/admin issues an invite (by CLI or, once they hold an API key, by REST), the invitee
+redeems it once to create their account, and from then on they authenticate with
+email/password to obtain API keys, rather than being handed one out of band.
+
+1. **Invite** — a tenant owner/admin creates an invite token for an email address and role:
+
+   ```console
+   $ make admin ARGS="create-invite 019f565d-f1e3-7afb-b876-b7003e43c230 newperson@example.com member"
+   invite created (the plaintext token is shown ONLY once — send it now)
+     token:      c8b9ea1f...
+     ...
+     expires at: 2026-07-20 16:57 UTC
+   ```
+
+   Send the plaintext `token` to the invitee out of band (email, chat, etc.) — like an API
+   key, it's shown only once and only its hash is persisted. It expires after `--ttl-hours`
+   (default 7 days) or immediately upon being redeemed, whichever comes first.
+
+2. **Signup** — the invitee redeems the token to create their account:
+
+   ```console
+   $ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
+       -d '{"invite_token":"c8b9ea1f...","password":"a strong password","display_name":"New Person"}'
+   {"user_id":"...","email":"newperson@example.com","tenant_id":"...","role":"member",
+    "workspaces":[{"id":"...","name":"default"}]}
+   ```
+
+   This both creates the `identity.users` row and adds the membership the invite specified
+   — a second signup attempt with the same (now-consumed) token is rejected (422).
+
+3. **Login** — from then on, the user exchanges their password for a freshly issued API key,
+   scoped to one workspace and capped at their role's `max_scope()` (see above):
+
+   ```console
+   $ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
+       -d '{"email":"newperson@example.com","password":"a strong password","workspace_id":"..."}'
+   {"api_key":"ysr_...","api_key_id":"...","workspace_id":"...","scope":"write","user_id":"..."}
+   ```
+
+   Every login issues a *new* key rather than reusing one — revoke old ones with
+   `admin revoke-api-key` if they're no longer needed.
+
+4. **Member management** — once authenticated, a tenant owner/admin can list and add members
+   over REST without needing `DATABASE_URL`/the admin CLI at all:
+
+   ```console
+   $ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
+   $ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
+       -H "Content-Type: application/json" \
+       -d '{"email":"existing-user@example.com","role":"admin"}'
+   ```
+
+   `POST /api/members` attaches an *existing* account (one that already completed signup) to
+   the caller's tenant — it never creates a new account. To bring in someone with no account
+   yet, issue them an invite (step 1) instead. Both endpoints require the caller's own key to
+   be attributed to an Owner/Admin member — a Member-role key is rejected with 403 regardless
+   of its own scope, since membership management is a tenant-role concern, not a scope one.
+
+A hosted deployment's admin dashboard SPA wraps steps 3 and 4 in a browser UI — see
+[deployment.md](deployment.md#hosted-deployment).

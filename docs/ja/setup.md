@@ -49,9 +49,15 @@ Yorishiroの制御プレーンは2階層構造です。
 
 テナントとワークスペースを分けることで、1つの組織が複数の独立したプロジェクト
 （環境別・チーム別のワークスペースなど）を新規テナントを都度作らずに運用でき、
-複数人でメンバーシップを介して同一テナントの管理権限を共有できます。この階層は
-まだREST/MCP APIには公開されておらず、`DATABASE_URL`を持つ者が下記の管理CLIから
-完全に管理します。
+複数人でメンバーシップを介して同一テナントの管理権限を共有できます。テナント/
+ワークスペースの**作成**は下記の管理CLI（`DATABASE_URL`を持つ者）からのみ可能です。
+日々の**メンバーシップ**管理（招待・追加・一覧）はテナントのowner/adminであれば
+RESTから行えます — [サインアップ・ログイン・メンバー管理](#サインアップログインメンバー管理)を参照。
+
+デフォルトでは、1つのデプロイでいくつでもテナントを作成できます。セルフホスト
+（コミュニティ）版では`YORISHIRO_MAX_TENANTS=1`を設定し（[configuration.md](configuration.md)参照）、
+`admin create-tenant`と下記のサインアップフローが2つ目のテナントを作れないようにして
+ください。多数のテナントを扱うホスティング版では未設定のままにします。
 
 ## テナント・ワークスペース・APIキーの発行
 
@@ -93,6 +99,7 @@ $ make admin ARGS="list-tenants"
 | `admin create-user <email> <password> [--display-name <name>]` | 人間のユーザーアカウントを作成 |
 | `admin add-member <tenant-id> <user-id> <role>` | ユーザーのテナントへのメンバーシップを追加（または既存のroleを変更）（`owner`/`admin`/`member`/`viewer`） |
 | `admin list-members <tenant-id>` | テナントのメンバーとそのroleの一覧 |
+| `admin create-invite <tenant-id> <email> <role> [--ttl-hours <n>]` | 指定したメールアドレスがテナントに参加するための招待トークンを発行（デフォルトTTL: 7日）— 詳細は後述 |
 | `admin create-api-key <workspace-id> <scope> [--user <user-id>]` | APIキーを発行（`--user`でメンバーに紐付け可能） |
 | `admin list-api-keys <workspace-id>` | キーの一覧（ID・scope・prefix・紐付けユーザー・最終使用日時） |
 | `admin revoke-api-key <key-id>` | キーの即時失効（漏洩時など） |
@@ -108,15 +115,85 @@ scopeは3段階の包含関係: `read` < `write` < `schema`。
 
 ### キーをユーザーに紐付ける
 
-Yorishiroはapi-frontendが前提（ログイン・セッションの仕組みはなく、人間の操作も自動化も
-すべてAPIキー経由）なので、マルチユーザーのアクセス制御はセッションではなくメンバーのroleに
-キーを紐付ける形で実現しています。`create-api-key`に`--user <user-id>`を渡すとそのメンバーに
-キーが紐付き、要求できるscopeは`MembershipRole::max_scope()`で上限が決まります:
-`owner`/`admin`は`schema`まで、`member`は`write`まで、`viewer`は`read`まで発行可能です。
-この上限を超えるscopeの要求や、ワークスペースの所属テナントのメンバーでないユーザーへの
-紐付けは、発行時点で拒否されます。このチェックはキー発行時に一度だけ行われ、キー自体のscope
-と同様にリクエストのたびに再評価されるわけではありません。そのため、メンバーシップを剥奪して
-もすでに発行済みのキーのscopeが遡って狭まることはありません（その場合はキー自体を失効させて
-ください）。サービス・自動化用の紐付け不要なキーには`--user`を省略してください（roleによる
-上限はかかりません）。`GET /whoami`はワークスペース・テナント・scopeに加えて、紐付けられた
-`user_id`（未紐付けなら`null`）も返します。
+人間の操作も自動化も、最終的にはすべてAPIキーで認証されます（サーバ側にcookie/セッション
+状態はありません）が、キーは人間のユーザーに**紐付け**でき、マルチユーザーのアクセス制御は
+セッションではなくその紐付けとユーザーのテナントroleを結びつける形で実現しています。
+`create-api-key`に`--user <user-id>`を渡すとそのメンバーにキーが紐付き、要求できるscopeは
+`MembershipRole::max_scope()`で上限が決まります: `owner`/`admin`は`schema`まで、`member`は
+`write`まで、`viewer`は`read`まで発行可能です。この上限を超えるscopeの要求や、ワークスペース
+の所属テナントのメンバーでないユーザーへの紐付けは、発行時点で拒否されます。このチェックは
+キー発行時に一度だけ行われ、キー自体のscopeと同様にリクエストのたびに再評価されるわけでは
+ありません。そのため、メンバーシップを剥奪してもすでに発行済みのキーのscopeが遡って狭まる
+ことはありません（その場合はキー自体を失効させてください）。サービス・自動化用の紐付け不要な
+キーには`--user`を省略してください（roleによる上限はかかりません）。`GET /whoami`は
+ワークスペース・テナント・scopeに加えて、紐付けられた`user_id`（未紐付けなら`null`）も
+返します。
+
+`POST /auth/login`（後述）は`admin create-api-key --user`のセルフサービス版に相当します。
+`DATABASE_URL`へのアクセスではなくパスワードで認証し、発行時点で呼び出し元自身のroleに
+上限を設定済みのキーを発行します。
+
+## サインアップ・ログイン・メンバー管理
+
+アカウント作成は招待制のみです — 公開・無認証のセルフサインアップはありません。
+テナントのowner/adminが招待を発行し、招待された人がそれを一度だけ使ってアカウントを作成し、
+それ以降はメールアドレス/パスワードで認証してAPIキーを取得します（帯域外でキーを渡されるの
+ではなく）。
+
+1. **招待** — テナントのowner/adminがメールアドレスとroleに対して招待トークンを作成します:
+
+   ```console
+   $ make admin ARGS="create-invite 019f565d-f1e3-7afb-b876-b7003e43c230 newperson@example.com member"
+   invite created (the plaintext token is shown ONLY once — send it now)
+     token:      c8b9ea1f...
+     ...
+     expires at: 2026-07-20 16:57 UTC
+   ```
+
+   平文の`token`は帯域外（メール・チャット等）で招待された人に送ってください — APIキー同様、
+   表示されるのは一度だけで、DBにはハッシュのみ保存されます。`--ttl-hours`（デフォルト7日）が
+   経過するか、使用済みになった時点のいずれか早い方で失効します。
+
+2. **サインアップ** — 招待された人がトークンを使ってアカウントを作成します:
+
+   ```console
+   $ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
+       -d '{"invite_token":"c8b9ea1f...","password":"a strong password","display_name":"New Person"}'
+   {"user_id":"...","email":"newperson@example.com","tenant_id":"...","role":"member",
+    "workspaces":[{"id":"...","name":"default"}]}
+   ```
+
+   これにより`identity.users`の行が作成されると同時に、招待で指定されたメンバーシップも
+   追加されます — 同じ（既に消費済みの）トークンでの2回目のサインアップは拒否されます（422）。
+
+3. **ログイン** — 以降、ユーザーはパスワードと引き換えに、1つのワークスペースにスコープされ、
+   自身のroleの`max_scope()`で上限が設定された新しいAPIキーを取得します（前述参照）:
+
+   ```console
+   $ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
+       -d '{"email":"newperson@example.com","password":"a strong password","workspace_id":"..."}'
+   {"api_key":"ysr_...","api_key_id":"...","workspace_id":"...","scope":"write","user_id":"..."}
+   ```
+
+   ログインのたびに既存キーの再利用ではなく*新しい*キーが発行されます — 不要になった古い
+   キーは`admin revoke-api-key`で失効させてください。
+
+4. **メンバー管理** — 認証後は、テナントのowner/adminは`DATABASE_URL`/管理CLIを一切使わずに
+   RESTでメンバーの一覧・追加ができます:
+
+   ```console
+   $ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
+   $ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
+       -H "Content-Type: application/json" \
+       -d '{"email":"existing-user@example.com","role":"admin"}'
+   ```
+
+   `POST /api/members`は**既存の**アカウント（既にサインアップを完了しているもの）を呼び出し
+   元のテナントに追加します — 新規アカウントを作成することはありません。まだアカウントを
+   持たない人を招き入れるには、代わりに招待（手順1）を発行してください。両エンドポイントとも、
+   呼び出し元自身のキーがOwner/Adminメンバーに紐付いていることが必要です — Memberロールの
+   キーは、そのキー自身のscopeに関わらず403で拒否されます。メンバー管理はscopeの問題ではなく
+   テナントroleの問題だからです。
+
+ホスティング版の管理ダッシュボードSPAは手順3・4をブラウザUIでラップしたものです —
+[deployment.md](deployment.md#ホスティング版のデプロイ)を参照してください。

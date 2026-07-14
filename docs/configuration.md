@@ -13,7 +13,9 @@ docker compose, `docker compose exec -e`, `Environment=` in systemd, or similar.
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string (required) |
 | `YSR_BIND` | Listen address (default: `0.0.0.0:8080`) |
-| `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access. Cross-origin reads are disabled if unset |
+| `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access (e.g. so a browser-based dashboard on a different origin can call `/auth/login`/`/api/members`). Cross-origin reads are disabled if unset |
+| `YORISHIRO_MAX_TENANTS` | Deployment-wide cap on the number of tenants `admin create-tenant` may create. Unset (default) means unlimited. Self-hosted (community) deployments should set this to `1`; hosted deployments should leave it unset. `POST /auth/signup` never creates a tenant (it only redeems an invite into an *existing* one), so it is unaffected |
+| `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | Per-client-IP rate limit on `/auth/signup` and `/auth/login` — the only two endpoints reachable without a bearer token, and therefore the only ones an unauthenticated caller can brute-force. Defaults: 10 requests per 60 seconds |
 | `RUST_LOG` | Log level (e.g. `info`) |
 
 ## Logging
@@ -64,3 +66,18 @@ object. `YSR_LOG_TARGET` selects where those lines go:
 See [docs/embedding-providers.md](embedding-providers.md) for a worked example, e.g.
 `https://huggingface.co/Xenova/all-mpnet-base-v2` (`onnx/model_quantized.onnx` and
 `tokenizer.json`).
+
+## Hosted-only (`yorishiro-hosted-server`)
+
+These apply only to the separate `yorishiro-hosted-server` process/image (Stripe billing,
+usage metering, and the admin dashboard SPA — see
+[deployment.md](deployment.md#hosted-deployment)). Self-hosted deployments never run this
+process, so none of these are relevant there.
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Same PostgreSQL connection string as `yorishiro-server` (required) |
+| `YORISHIRO_HOSTED_BIND` | Listen address (default: `0.0.0.0:8081`) |
+| `YORISHIRO_HOSTED_WEB_DIR` | Directory the admin dashboard SPA's static files are served from (default: `web`, relative to the process's working directory) |
+| `YORISHIRO_STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret. Unset (default) makes `/hosted/stripe/webhook` respond `501` instead of accepting unverifiable requests — real Stripe credentials are deliberately deferred |
+| `YORISHIRO_STRIPE_PRICE_PRO` / `YORISHIRO_STRIPE_PRICE_TEAM` | Stripe Price ids mapped to the `pro`/`team` plans (see `Plan::caps()` in `crates/yorishiro-hosted/src/plan.rs`). Unset means that plan is never resolved from a webhook |

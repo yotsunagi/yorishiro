@@ -33,6 +33,40 @@ JSONB containment, e.g. `filter={"status":"active"}`), and `POST /api/schemas` a
 either an inline definition or `{"template_id": "..."}` to register one of the built-in
 templates listed at `GET /api/templates`.
 
+### Auth & member management
+
+Unlike every other endpoint, `/auth/signup` and `/auth/login` take no bearer token — their
+entire purpose is to hand one out. See
+[setup.md](setup.md#signup-login-and-member-management) for the full invite → signup →
+login flow.
+
+```console
+# Redeem an invite (see `admin create-invite`) to create an account
+$ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
+    -d '{"invite_token":"...","password":"...","display_name":"..."}'
+
+# Exchange email/password for a freshly issued, role-capped API key
+$ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
+    -d '{"email":"...","password":"...","workspace_id":"..."}'
+
+# List / add members of the caller's own tenant (owner/admin only)
+$ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
+$ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
+    -H "Content-Type: application/json" -d '{"email":"...","role":"member"}'
+```
+
+`POST /api/members` attaches an *existing* account to the caller's tenant — it never creates
+one (that's what signup does). Both member-management endpoints are gated on the caller's
+tenant role (owner/admin), independent of their key's own scope.
+
+### Hosted-only endpoints
+
+A hosted deployment runs a second process (`yorishiro-hosted-server`, see
+[deployment.md](deployment.md#hosted-deployment)) exposing `POST /hosted/stripe/webhook`
+(Stripe subscription webhook) and `GET /hosted/tenant/overview` (billing/usage/member data
+backing the admin dashboard SPA). Self-hosted deployments never run this process, so these
+paths don't exist there.
+
 ## MCP Tools
 
 Connecting to `/mcp` (Streamable HTTP) gives you access to 17 tools. Example connection
