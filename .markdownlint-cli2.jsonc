@@ -1,0 +1,12 @@
+{
+  "config": {
+    "default": true,
+    // Long lines are expected: prose is written as single unwrapped lines, and
+    // console/config blocks contain long commands/values.
+    "MD013": false,
+    // Command-output blocks (` ```console ` with a leading `$`) aren't literal shell input.
+    "MD014": false,
+    // Table dash-style nitpick; not worth enforcing across hand-written reference tables.
+    "MD060": false
+  }
+}

@@ -51,18 +51,11 @@ flowchart TD
 - **スキーマバージョニング**: 同名スキーマの再登録は新バージョンとして追加され、破壊的変更
   （フィールド削除・型変更・必須化など）は差分として報告される。既存エンティティは
   作成時点のスキーマバージョンに対して検証され続ける。
-- **単一バイナリ**: 上記は全て単一の`yorishiro-server`バイナリに含まれている。
-  `YORISHIRO_MAX_TENANTS=1`を設定すればシングルテナント構成になる。同じ設定は初回
-  セットアップウィザード（`/`のブラウザUI、または`POST /setup`）も有効にし、テナント・
-  ワークスペース・ownerアカウントを一括作成できる — 管理CLIは不要。最初のアカウント以降は
-  招待制のみ（`admin create-invite` → `POST /auth/signup` → `POST /auth/login`）で、
-  テナントのowner/adminは管理CLIを使わずともREST（`/api/members`）でメンバーを管理できる。
+- **単一バイナリ**: 上記は全て単一の`yorishiro-server`バイナリに含まれており、既定でシングルテナント構成（`YORISHIRO_MAX_TENANTS=1`）として動作する（無制限にするには`0`を設定）。この上限は初回セットアップウィザード（`/`のブラウザUI、または`POST /setup`）も有効にし、テナント・ワークスペース・ownerアカウントを一括作成できる — 管理CLIは不要。最初のアカウント以降は招待制のみ（`admin create-invite` → `POST /auth/signup` → `POST /auth/login`）で、テナントのowner/adminは管理CLIを使わずともREST（`/api/members`）でメンバーを管理できる。
 
 ## クイックスタート
 
-埋め込みプロバイダの設定が起動に必須です。以下の例では外部サービス不要のローカルONNX
-プロバイダを使うので、まず768次元のBERT系ONNXモデルを配置します
-（[docs/ja/embedding-providers.md](embedding-providers.md)参照）:
+サーバの起動には埋め込みモデルが必要です。既定では外部サービスもモデルファイル以外の設定も不要なローカルONNXプロバイダを使うので、まず768次元のBERT系ONNXモデルを配置します(詳細・OpenAI互換エンドポイントへの切り替え方法は[docs/ja/embedding-providers.md](embedding-providers.md)参照):
 
 ```console
 $ mkdir -p models
@@ -83,14 +76,10 @@ $ curl -L -o models/tokenizer.json \
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     -v "$(pwd)/models:/app/models:ro" \
     -e DATABASE_URL=postgres://... \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド
-起動を含む）は[docs/ja/deployment.md](deployment.md)を参照してください。
+これだけでシングルテナント構成として完全に動作します — `YSR_WEB_DIR`・`YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`（とONNXモデル/トークナイザーのパス）は全て[docs/ja/setup.md](setup.md)に示す値が既定になっており、上で配置した`models/`のレイアウトとも一致します。Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド起動を含む）は[docs/ja/deployment.md](deployment.md)を参照してください。
 
 ### ソースからビルド（Docker Compose）
 
@@ -116,7 +105,7 @@ $ make init
 | [docs/ja/setup.md](setup.md) | セットアップ手順一式（起動・エンドポイント・テナント/ワークスペース/ユーザー/APIキー発行・認証とscope） |
 | [docs/ja/schema.md](schema.md) | エンティティ型・リレーションを定義するメタスキーマガイド |
 | [docs/ja/api.md](api.md) | REST APIとMCPツールのリファレンス |
-| [docs/ja/embedding-providers.md](embedding-providers.md) | 埋め込みプロバイダの設定（`openai`互換 / ローカル`local` ONNX） |
+| [docs/ja/embedding-providers.md](embedding-providers.md) | 埋め込みプロバイダの設定（ローカル`local` ONNX / `openai`互換） |
 | [docs/ja/configuration.md](configuration.md) | 環境変数リファレンス |
 | [docs/ja/deployment.md](deployment.md) | 本番デプロイ手順 |
 | [docs/ja/operations.md](operations.md) | 運用上の注意（バックアップ・レート制限・可観測性） |

@@ -4,9 +4,7 @@
 
 ## 起動手順
 
-埋め込みプロバイダの設定が起動に必須です。以下の例では外部サービス不要のローカルONNX
-プロバイダを使うので、まず768次元のBERT系ONNXモデルを配置します
-（[embedding-providers.md](embedding-providers.md)参照）:
+サーバの起動には埋め込みモデルが必要です。既定では外部サービスもモデルファイル以外の設定も不要なローカルONNXプロバイダを使うので、まず768次元のBERT系ONNXモデルを配置します(詳細・OpenAI互換エンドポイントへの切り替え方法は[embedding-providers.md](embedding-providers.md)参照):
 
 ```console
 $ mkdir -p models
@@ -23,11 +21,10 @@ $ curl -L -o models/tokenizer.json \
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     -v "$(pwd)/models:/app/models:ro" \
     -e DATABASE_URL=postgres://... \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
+
+これだけでシングルテナント構成として完全に動作します。`YSR_WEB_DIR`（`web/`からWeb UIを配信）、`YORISHIRO_MAX_TENANTS`（このデプロイをテナント1つに制限）、`YSR_EMBEDDING_PROVIDER`（上でマウントした`models/model.onnx`/`models/tokenizer.json`を使うローカルONNXモデル）は全て既定でこの値になっているためです。変更方法は[configuration.md](configuration.md)を参照してください。
 
 Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド起動を
 含む）やソースからのビルドは[deployment.md](deployment.md)を参照してください。ローカル開発
@@ -47,7 +44,7 @@ $ make init
 |---|---|
 | `http://localhost:8080/up` | Liveness probe（プロセスが起動していれば依存関係を見ず常に200） |
 | `http://localhost:8080/health` | Readiness check（DB接続も確認し、障害時は503） |
-| `http://localhost:8080/` | セットアップ・ログイン用Web UI（`YSR_WEB_DIR`設定時のみ、後述） |
+| `http://localhost:8080/` | セットアップ・ログイン用Web UI（`YSR_WEB_DIR`から配信。既定は`web`、後述） |
 | `http://localhost:8080/docs` | Swagger UI（REST APIドキュメント） |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI仕様 |
 | `http://localhost:8080/mcp` | MCPエンドポイント（Streamable HTTP） |
@@ -55,13 +52,7 @@ $ make init
 
 ## 初回セットアップ
 
-`YORISHIRO_MAX_TENANTS`が設定されているデプロイ（`docker-compose.yml`の`app`サービスは
-これに加えて`YSR_WEB_DIR=web`も設定済み）では、
-`http://localhost:8080/`でセットアップウィザードが配信されます — 管理CLIは不要です。
-まだテナントが存在しない初回アクセス時は、メールアドレスとパスワードだけを入力する
-フォームが表示され、送信するとテナント・`default`ワークスペース・ownerアカウントが
-一括作成され、発行されたAPIキー（他のキー同様、表示は一度だけ）が画面に表示されます。
-以降は同じページがログインフォームになります。
+`YORISHIRO_MAX_TENANTS`が実際の上限として解決されるデプロイ（既定: 未設定なら`1`）では、`http://localhost:8080/`でセットアップウィザードが配信されます — 管理CLIは不要です。まだテナントが存在しない初回アクセス時は、メールアドレスとパスワードだけを入力するフォームが表示され、送信するとテナント・`default`ワークスペース・ownerアカウントが一括作成され、発行されたAPIキー（他のキー同様、表示は一度だけ）が画面に表示されます。以降は同じページがログインフォームになります。
 
 同じフローはブラウザなしでも利用できます:
 
@@ -74,42 +65,22 @@ $ curl -X POST localhost:8080/setup -H "Content-Type: application/json" \
  "api_key":"ysr_..."}
 ```
 
-`POST /setup`は既にテナントが存在する場合、または`YORISHIRO_MAX_TENANTS`が未設定の
-デプロイ（この場合はサインアップ・招待でテナントを増やします — 
-[サインアップ・ログイン・メンバー管理](#サインアップログインメンバー管理)参照）では
-`404`を返します。下記の管理CLIは、ウィザードがカバーしない操作（追加のワークスペース/
-テナント、招待、キーのローテーション）のために引き続き利用できます。
+`POST /setup`は既にテナントが存在する場合、または`YORISHIRO_MAX_TENANTS`が無制限に解決されるデプロイ（明示的に`0`を設定した場合。この場合はサインアップ・招待でテナントを増やします — [サインアップ・ログイン・メンバー管理](#サインアップログインメンバー管理)参照）では`404`を返します。下記の管理CLIは、ウィザードがカバーしない操作（追加のワークスペース/テナント、招待、キーのローテーション）のために引き続き利用できます。
 
 ## テナント・ワークスペース・ユーザー
 
 Yorishiroの制御プレーンは2階層構造です。
 
-- **テナント**は組織/アカウント。`max_workspaces`を設定でき（課金上限。デフォルトの
-  `NULL`は無制限で、セルフホスト運用に適する）、任意数の人間の**ユーザー**を
-  ロール（`owner`/`admin`/`member`/`viewer`）付きのメンバーシップとして紐付けられる。
-  1人のユーザーが複数のテナントに所属することもできる。
-- **ワークスペース**はちょうど1つのテナントに属し、実際の操作対象コンテナ。
-  スキーマ・エンティティ・リレーション・APIキーはすべてテナントではなくワークスペースに
-  紐付く。ワークスペースは`max_entities`を設定できる（これもデフォルト`NULL`/無制限）。
+- **テナント**は組織/アカウント。`max_workspaces`を設定でき（課金上限。デフォルトの`NULL`は無制限で、セルフホスト運用に適する）、任意数の人間の**ユーザー**をロール（`owner`/`admin`/`member`/`viewer`）付きのメンバーシップとして紐付けられる。1人のユーザーが複数のテナントに所属することもできる。
+- **ワークスペース**はちょうど1つのテナントに属し、実際の操作対象コンテナ。スキーマ・エンティティ・リレーション・APIキーはすべてテナントではなくワークスペースに紐付く。ワークスペースは`max_entities`を設定できる（これもデフォルト`NULL`/無制限）。
 
-テナントとワークスペースを分けることで、1つの組織が複数の独立したプロジェクト
-（環境別・チーム別のワークスペースなど）を新規テナントを都度作らずに運用でき、
-複数人でメンバーシップを介して同一テナントの管理権限を共有できます。テナント/
-ワークスペースの**作成**は下記の管理CLI（`DATABASE_URL`を持つ者）からのみ可能です。
-日々の**メンバーシップ**管理（招待・追加・一覧）はテナントのowner/adminであれば
-RESTから行えます — [サインアップ・ログイン・メンバー管理](#サインアップログインメンバー管理)を参照。
+テナントとワークスペースを分けることで、1つの組織が複数の独立したプロジェクト（環境別・チーム別のワークスペースなど）を新規テナントを都度作らずに運用でき、複数人でメンバーシップを介して同一テナントの管理権限を共有できます。テナント/ワークスペースの**作成**は下記の管理CLI（`DATABASE_URL`を持つ者）からのみ可能です。日々の**メンバーシップ**管理（招待・追加・一覧）はテナントのowner/adminであればRESTから行えます — [サインアップ・ログイン・メンバー管理](#サインアップログインメンバー管理)を参照。
 
-デフォルトでは、1つのデプロイでいくつでもテナントを作成できます。シングルテナントの
-デプロイでは`YORISHIRO_MAX_TENANTS=1`を設定し（[configuration.md](configuration.md)参照）、
-`admin create-tenant`と下記のサインアップフローが2つ目のテナントを作れないようにして
-ください。多数のテナントを扱う場合は未設定のままにします。
+デフォルト（`YORISHIRO_MAX_TENANTS`未設定）では、1つのデプロイはテナント1つに制限され、`admin create-tenant`と下記のサインアップフローは2つ目のテナントを作れません。無制限にするには`YORISHIRO_MAX_TENANTS=0`を（[configuration.md](configuration.md)参照）、特定数までにするにはその数を設定してください。
 
 ## テナント・ワークスペース・APIキーの発行
 
-上記のセットアップウィザードを使ったデプロイは、この節を飛ばせます
-（`YORISHIRO_MAX_TENANTS=1`の下では最初かつ唯一のテナントになります）。追加のテナント/
-ワークスペースの発行や、`YORISHIRO_MAX_TENANTS`未設定でのあらゆる発行には引き続き
-この節の手順が唯一の方法です。
+上記のセットアップウィザードを使ったデプロイは、この節を飛ばせます（既定の`YORISHIRO_MAX_TENANTS=1`の下では最初かつ唯一のテナントになります）。追加のテナント/ワークスペースの発行や、`YORISHIRO_MAX_TENANTS`が無制限に解決されるデプロイでのあらゆる発行（この場合ウィザードは無効です）には引き続きこの節の手順が唯一の方法です。
 
 APIキーはDBにSHA-256ハッシュ、ユーザーパスワードはargon2ハッシュでのみ保存されるため、
 どちらも手作業のSQLでは発行できず、管理CLIで行います:

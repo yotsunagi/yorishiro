@@ -95,14 +95,14 @@ pub struct MembershipRecord {
     pub role: MembershipRole,
 }
 
-/// Creates a tenant, enforcing the system-wide tenant cap from `YORISHIRO_MAX_TENANTS` (unset
-/// means unlimited). This is a deployment-wide limit rather than a per-tenant column, since it
-/// bounds a deployment to a single tenant without needing a settings table: operators
-/// set `YORISHIRO_MAX_TENANTS=1` for a self-hosted, single-tenant deployment and leave it unset
-/// to allow multiple tenants. It is enforced only in application code (there is no anti-tampering
-/// against an operator who edits the source or the env var directly) — like the rest of this
-/// module's caps, it exists for product consistency, not as a security boundary against whoever
-/// controls the deployment.
+/// Creates a tenant, enforcing the system-wide tenant cap from `YORISHIRO_MAX_TENANTS` (`0` or
+/// unset means unlimited). This is a deployment-wide limit rather than a per-tenant column, since
+/// it bounds a deployment to a single tenant without needing a settings table: `yorishiro-server`
+/// defaults this to `1` (single-tenant) and deployments that want multiple tenants set it to `0`
+/// or a higher count. It is enforced only in application code (there is no anti-tampering against
+/// an operator who edits the source or the env var directly) — like the rest of this module's
+/// caps, it exists for product consistency, not as a security boundary against whoever controls
+/// the deployment.
 pub async fn create_tenant(
     pool: &PgPool,
     name: &str,
@@ -111,15 +111,25 @@ pub async fn create_tenant(
     create_tenant_with_cap(pool, name, max_workspaces, max_tenants_from_env()?).await
 }
 
-/// Reads and parses `YORISHIRO_MAX_TENANTS`. Unset means unlimited; a non-integer value is a
-/// misconfiguration and fails loudly rather than silently falling back to unlimited.
-fn max_tenants_from_env() -> Result<Option<i32>, YorishiroError> {
+/// Reads and parses `YORISHIRO_MAX_TENANTS`. Unset or `0` means unlimited; a negative or
+/// non-integer value is a misconfiguration and fails loudly rather than silently falling back to
+/// unlimited.
+pub fn max_tenants_from_env() -> Result<Option<i32>, YorishiroError> {
     match std::env::var("YORISHIRO_MAX_TENANTS") {
-        Ok(raw) => raw.parse::<i32>().map(Some).map_err(|_| {
-            YorishiroError::Internal(anyhow::anyhow!(
-                "YORISHIRO_MAX_TENANTS must be an integer, got '{raw}'"
-            ))
-        }),
+        Ok(raw) => {
+            let parsed = raw.parse::<i32>().map_err(|_| {
+                YorishiroError::Internal(anyhow::anyhow!(
+                    "YORISHIRO_MAX_TENANTS must be an integer, got '{raw}'"
+                ))
+            })?;
+            match parsed {
+                0 => Ok(None),
+                n if n < 0 => Err(YorishiroError::Internal(anyhow::anyhow!(
+                    "YORISHIRO_MAX_TENANTS must not be negative, got '{raw}'"
+                ))),
+                n => Ok(Some(n)),
+            }
+        }
         Err(_) => Ok(None),
     }
 }
@@ -669,6 +679,53 @@ mod tests {
         create_tenant_with_cap(&pool, "second", None, None)
             .await
             .unwrap();
+    }
+
+    /// `YORISHIRO_MAX_TENANTS` is process-wide state, so these tests serialize through this lock
+    /// rather than racing the env var against each other.
+    static MAX_TENANTS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn max_tenants_from_env_unset_is_unlimited() {
+        let _guard = MAX_TENANTS_ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") };
+        assert_eq!(max_tenants_from_env().unwrap(), None);
+    }
+
+    #[test]
+    fn max_tenants_from_env_zero_is_unlimited() {
+        let _guard = MAX_TENANTS_ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", "0") };
+        let result = max_tenants_from_env().unwrap();
+        unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") };
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn max_tenants_from_env_positive_is_the_cap() {
+        let _guard = MAX_TENANTS_ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", "3") };
+        let result = max_tenants_from_env().unwrap();
+        unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") };
+        assert_eq!(result, Some(3));
+    }
+
+    #[test]
+    fn max_tenants_from_env_rejects_negative() {
+        let _guard = MAX_TENANTS_ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", "-1") };
+        let result = max_tenants_from_env();
+        unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") };
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn max_tenants_from_env_rejects_non_integer() {
+        let _guard = MAX_TENANTS_ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", "abc") };
+        let result = max_tenants_from_env();
+        unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") };
+        assert!(result.is_err());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

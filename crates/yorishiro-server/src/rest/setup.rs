@@ -13,13 +13,13 @@ use crate::error::ApiError;
 use crate::state::AppState;
 
 /// Whether the community-edition first-run setup wizard is enabled at all. Gated on
-/// `YORISHIRO_MAX_TENANTS` being set (community deployments set it to `1`; hosted deployments
-/// leave it unset) rather than a separate flag, so the wizard can never be enabled on a
-/// deployment that lacks the tenant cap that makes it safe -- without that cap, anyone could
-/// hit `POST /setup` between a hosted deploy and its first real tenant and claim ownership of
-/// the whole deployment.
+/// `YORISHIRO_MAX_TENANTS` resolving to an actual cap (`yorishiro-server` defaults this to `1`;
+/// hosted deployments set it to `0`, i.e. unlimited) rather than a separate flag, so the wizard
+/// can never be enabled on a deployment that lacks the tenant cap that makes it safe -- without
+/// that cap, anyone could hit `POST /setup` between a hosted deploy and its first real tenant and
+/// claim ownership of the whole deployment.
 fn wizard_enabled() -> bool {
-    std::env::var("YORISHIRO_MAX_TENANTS").is_ok()
+    matches!(tenancy::max_tenants_from_env(), Ok(Some(_)))
 }
 
 async fn tenant_count(pool: &sqlx::PgPool) -> Result<i64, YorishiroError> {
@@ -79,7 +79,7 @@ pub struct SetupResponse {
     request_body = SetupRequest,
     responses(
         (status = 201, description = "Deployment initialized: tenant, workspace, and owner account created", body = SetupResponse),
-        (status = 404, description = "The setup wizard is disabled on this deployment (YORISHIRO_MAX_TENANTS is unset)", body = crate::error::ApiErrorBody),
+        (status = 404, description = "The setup wizard is disabled on this deployment (YORISHIRO_MAX_TENANTS resolves to unlimited)", body = crate::error::ApiErrorBody),
         (status = 409, description = "This deployment has already been set up", body = crate::error::ApiErrorBody),
         (status = 429, description = "Too many requests from this caller; retry later"),
     ),
@@ -220,6 +220,21 @@ mod tests {
     async fn status_reports_setup_not_required_when_wizard_disabled(pool: PgPool) {
         let _guard = ENV_LOCK.lock().unwrap();
         set_max_tenants(None);
+        let app = app(pool);
+        let response = request(&app, "GET", "/setup/status", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["setup_required"], false);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
+    async fn status_reports_setup_not_required_when_max_tenants_is_zero(pool: PgPool) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        set_max_tenants(Some("0"));
         let app = app(pool);
         let response = request(&app, "GET", "/setup/status", None).await;
         assert_eq!(response.status(), StatusCode::OK);

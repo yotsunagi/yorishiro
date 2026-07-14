@@ -53,19 +53,15 @@ flowchart TD
   breaking changes (removed fields, type changes, newly required fields, etc.) are reported
   as a diff. Existing entities continue to be validated against the schema version that was
   active when they were created.
-- **Single binary**: everything above ships in the single `yorishiro-server` binary — set
-  `YORISHIRO_MAX_TENANTS=1` to keep it single-tenant. The same setting also enables a
-  first-run setup wizard (browser UI at `/`, or `POST /setup`) that creates the tenant,
-  workspace, and owner account in one step — no admin CLI needed. Beyond that first account,
-  further account creation is invite-only (`admin create-invite` → `POST /auth/signup` →
-  `POST /auth/login`), and tenant owners/admins can manage members over REST (`/api/members`)
-  without touching the admin CLI.
+- **Single binary**: everything above ships in the single `yorishiro-server` binary, which defaults to a single-tenant deployment (`YORISHIRO_MAX_TENANTS=1`; set it to `0` for unlimited tenants). That same cap also enables a first-run setup wizard (browser UI at `/`, or `POST /setup`) that creates the tenant, workspace, and owner account in one step — no admin CLI needed. Beyond that first account, further account creation is invite-only (`admin create-invite` → `POST /auth/signup` → `POST /auth/login`), and tenant owners/admins can manage members over REST (`/api/members`) without touching the admin CLI.
 
 ## Quick start
 
-An embedding provider must be configured for the server to start. The examples below use
-the local ONNX provider, which needs no external service — fetch a 768-dimensional
-BERT-family model first (see [docs/embedding-providers.md](docs/embedding-providers.md)):
+The server needs an embedding model to start; it defaults to the local ONNX provider, which
+needs no external service or configuration beyond the model files themselves — fetch a
+768-dimensional BERT-family model first (see
+[docs/embedding-providers.md](docs/embedding-providers.md); to use an OpenAI-compatible
+endpoint instead, see that same doc):
 
 ```console
 $ mkdir -p models
@@ -85,15 +81,10 @@ already bundles the setup-wizard SPA (`web/`) — only the embedding model needs
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     -v "$(pwd)/models:/app/models:ro" \
     -e DATABASE_URL=postgres://... \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-See [docs/deployment.md](docs/deployment.md) for running the prebuilt Linux binary from
-[GitHub Releases](https://github.com/yotsunagi/yorishiro/releases) without Docker, including
-how to run it in the background via systemd.
+That's a complete single-tenant deployment as-is — `YSR_WEB_DIR`, `YORISHIRO_MAX_TENANTS`, and `YSR_EMBEDDING_PROVIDER` (plus the ONNX model/tokenizer paths) all already default to the values shown in [docs/setup.md](docs/setup.md), matching the `models/` layout fetched above. See [docs/deployment.md](docs/deployment.md) for running the prebuilt Linux binary from [GitHub Releases](https://github.com/yotsunagi/yorishiro/releases) without Docker, including how to run it in the background via systemd.
 
 ### From source (Docker Compose)
 
@@ -119,7 +110,7 @@ user/API key provisioning, and auth model.
 | [docs/setup.md](docs/setup.md) | Full setup guide: startup, endpoints, tenant/workspace/user/API key provisioning, auth & scopes |
 | [docs/schema.md](docs/schema.md) | Meta-schema guide for defining entity types and relations |
 | [docs/api.md](docs/api.md) | REST API and MCP tool reference |
-| [docs/embedding-providers.md](docs/embedding-providers.md) | Configuring embedding providers (`openai`-compatible / `local` ONNX) |
+| [docs/embedding-providers.md](docs/embedding-providers.md) | Configuring embedding providers (`local` ONNX / `openai`-compatible) |
 | [docs/configuration.md](docs/configuration.md) | Environment variable reference |
 | [docs/deployment.md](docs/deployment.md) | Production deployment guide |
 | [docs/operations.md](docs/operations.md) | Operational notes: backups, rate limiting, observability |

@@ -27,18 +27,20 @@ services:
       DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
       YSR_BIND: 0.0.0.0:8080
       RUST_LOG: info
-      YSR_EMBEDDING_PROVIDER: local
-      YSR_ONNX_MODEL_PATH: models/model.onnx
-      YSR_ONNX_TOKENIZER_PATH: models/tokenizer.json
       # Lets a dashboard SPA served from a different origin call this API cross-origin.
       # Deployments that never need that can leave this unset -- an empty value disables CORS
       # entirely, same as before this existed.
       YSR_CORS_ORIGINS: http://localhost:8081
-      # Serves web/ (login + first-run setup wizard) from this same process at "/".
+      # All four of these already match yorishiro-server's built-in defaults (web/ served at
+      # "/", single-tenant cap that also gates the first-run setup wizard, local ONNX embedding
+      # provider reading models/model.onnx + models/tokenizer.json -- see
+      # crates/yorishiro-server/src/main.rs and rest/setup.rs); spelled out here for clarity.
+      # Set YORISHIRO_MAX_TENANTS to "0" to allow multiple tenants instead.
       YSR_WEB_DIR: web
-      # Single-tenant cap for this community-edition deployment; also what gates the
-      # first-run setup wizard (GET/POST /setup) on -- see crates/yorishiro-server/src/rest/setup.rs.
       YORISHIRO_MAX_TENANTS: "1"
+      YSR_EMBEDDING_PROVIDER: local
+      YSR_ONNX_MODEL_PATH: models/model.onnx
+      YSR_ONNX_TOKENIZER_PATH: models/tokenizer.json
     ports:
       - "8080:8080"
     depends_on:

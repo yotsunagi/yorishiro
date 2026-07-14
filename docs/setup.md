@@ -4,9 +4,10 @@
 
 ## Prerequisites and startup
 
-Configuring an embedding provider is required before the server will start. The examples
-below use the local ONNX provider, which needs no external service — fetch a
-768-dimensional BERT-family model first (see [embedding-providers.md](embedding-providers.md)):
+The server needs an embedding model to start; it defaults to the local ONNX provider, which
+needs no external service or configuration beyond the model files themselves — fetch a
+768-dimensional BERT-family model first (see [embedding-providers.md](embedding-providers.md);
+to use an OpenAI-compatible endpoint instead, see that same doc):
 
 ```console
 $ mkdir -p models
@@ -23,18 +24,10 @@ The quickest way to start the server is the prebuilt Docker image
 $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
     -v "$(pwd)/models:/app/models:ro" \
     -e DATABASE_URL=postgres://... \
-    -e YSR_EMBEDDING_PROVIDER=local \
-    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
-    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
     ghcr.io/yotsunagi/yorishiro:latest
 ```
 
-See [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker
-(including background/systemd operation), or for building from source. For local
-development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images
-(from the same multi-stage `Dockerfile` the release image is built from) and starts
-PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider
-configured above:
+This is a complete, working single-tenant deployment as-is: `YSR_WEB_DIR` (serves the web UI from `web/`), `YORISHIRO_MAX_TENANTS` (caps this deployment at one tenant), and `YSR_EMBEDDING_PROVIDER` (uses the local ONNX model at `models/model.onnx`/`models/tokenizer.json`, matching the volume mounted above) all already default to that. See [configuration.md](configuration.md) to change any of them, or [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker (including background/systemd operation), or for building from source. For local development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same multi-stage `Dockerfile` the release image is built from) and starts PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider configured above:
 
 ```console
 $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
@@ -48,7 +41,7 @@ Migrations are applied automatically on startup. Endpoints:
 |---|---|
 | `http://localhost:8080/up` | Liveness probe (always 200 if the process is running; no dependency checks) |
 | `http://localhost:8080/health` | Readiness check (also probes DB connectivity; 503 on outage) |
-| `http://localhost:8080/` | Setup/login web UI (only when `YSR_WEB_DIR` is set — see below) |
+| `http://localhost:8080/` | Setup/login web UI (served from `YSR_WEB_DIR`, `web` by default — see below) |
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
@@ -56,13 +49,7 @@ Migrations are applied automatically on startup. Endpoints:
 
 ## First-run setup
 
-Deployments with `YORISHIRO_MAX_TENANTS` set (`docker-compose.yml`'s `app`
-service does this and also sets `YSR_WEB_DIR=web`) serve a setup wizard at
-`http://localhost:8080/` — no admin CLI needed. On first visit, since no tenant exists yet,
-the browser shows a form asking only for an email and password; submitting it creates the
-tenant, its `default` workspace, and an owner account in one step, and displays the freshly
-issued API key (shown only once, same as every other key in this system). Visiting the same
-page afterward shows a login form instead.
+Deployments where `YORISHIRO_MAX_TENANTS` resolves to an actual cap (the default: unset means `1`) serve a setup wizard at `http://localhost:8080/` — no admin CLI needed. On first visit, since no tenant exists yet, the browser shows a form asking only for an email and password; submitting it creates the tenant, its `default` workspace, and an owner account in one step, and displays the freshly issued API key (shown only once, same as every other key in this system). Visiting the same page afterward shows a login form instead.
 
 The same flow is available without a browser:
 
@@ -75,11 +62,7 @@ $ curl -X POST localhost:8080/setup -H "Content-Type: application/json" \
  "api_key":"ysr_..."}
 ```
 
-`POST /setup` returns `404` once a tenant already exists, or on any deployment where
-`YORISHIRO_MAX_TENANTS` is unset — hosted deployments onboard tenants via signup/invite
-instead (see [Signup, login, and member management](#signup-login-and-member-management)).
-The admin CLI below remains available for anything the wizard doesn't cover: additional
-workspaces/tenants, invites, and key rotation.
+`POST /setup` returns `404` once a tenant already exists, or on any deployment where `YORISHIRO_MAX_TENANTS` resolves to unlimited (i.e. explicitly set to `0`) — hosted deployments onboard tenants via signup/invite instead (see [Signup, login, and member management](#signup-login-and-member-management)). The admin CLI below remains available for anything the wizard doesn't cover: additional workspaces/tenants, invites, and key rotation.
 
 ## Tenants, workspaces, and users
 
@@ -101,17 +84,11 @@ whoever holds `DATABASE_URL`); day-to-day *membership* management (inviting/addi
 members) is available to tenant owners/admins over REST — see
 [Signup, login, and member management](#signup-login-and-member-management).
 
-By default, a deployment may create any number of tenants. Single-tenant deployments
-should set `YORISHIRO_MAX_TENANTS=1` (see
-[configuration.md](configuration.md)) so `admin create-tenant` and the signup flow below
-can never create a second one; leave it unset to allow multiple tenants.
+By default (unset `YORISHIRO_MAX_TENANTS`), a deployment is capped at a single tenant, so `admin create-tenant` and the signup flow below can never create a second one. Set `YORISHIRO_MAX_TENANTS=0` (see [configuration.md](configuration.md)) to allow unlimited tenants, or to a specific number to allow that many.
 
 ## Provisioning tenants, workspaces, and API keys
 
-Deployments that used the setup wizard above can skip this section for their first (and, per
-`YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to provision *additional*
-tenants/workspaces, and the only way to provision anything at all when
-`YORISHIRO_MAX_TENANTS` is unset.
+Deployments that used the setup wizard above can skip this section for their first (and, under the default `YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to provision *additional* tenants/workspaces, and the only way to provision anything at all on deployments where `YORISHIRO_MAX_TENANTS` resolves to unlimited (the wizard is disabled there).
 
 API keys are stored in the database only as SHA-256 hashes and user passwords only as
 argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:
