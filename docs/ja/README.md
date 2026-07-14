@@ -60,22 +60,22 @@ flowchart TD
   招待制のみ（`admin create-invite` → `POST /auth/signup` → `POST /auth/login`）で、
   テナントのowner/adminは管理CLIを使わずともREST（`/api/members`）でメンバーを管理できる。
   Stripe課金・使用量計測・管理ダッシュボードSPAはホスティング版固有の関心事であり、
-  コミュニティ版に一切含まれず攻撃対象領域を増やさないよう、別クレート/プロセス/
-  Dockerイメージ（`yorishiro-hosted`）に分離されている。詳細は
+  コミュニティ版に一切含まれず攻撃対象領域を増やさないよう、別プロダクトとして非公開の
+  リポジトリ（`yotsunagi/yorishiro-enterprise`）で開発されている。詳細は
   [docs/ja/deployment.md](deployment.md#ホスティング版のデプロイ)を参照。
 
 ## コミュニティ版とホスティング版の比較
 
 | | コミュニティ版（セルフホスト） | ホスティング版 |
 |---|---|---|
-| バイナリ/イメージ | `yorishiro-server`（`Dockerfile`） | `yorishiro-server` + `yorishiro-hosted-server`（`Dockerfile.hosted`） |
+| ソース | このリポジトリ（公開） | `yotsunagi/yorishiro-enterprise`（非公開） |
 | テナント数 | 1（`YORISHIRO_MAX_TENANTS=1`） | 無制限 |
 | テナントあたりのユーザー数 | 無制限 | 無制限 |
 | 課金 | なし | Stripe Webhook + プラン上限（[docs/ja/deployment.md](deployment.md#ホスティング版のデプロイ)） |
-| 管理ダッシュボードSPA | 起動しない（`hosted`はopt-inのComposeプロファイル） | `docker compose --profile hosted up` / `make up-hosted` |
+| 管理ダッシュボードSPA | 含まれない（別のホスティング版限定プロセスが配信） | 含まれる |
 
 サインアップ/ログインと`/api/members`はどちらの版でもコアの`yorishiro-server`のAPIの一部
-であり、ホスティング版クレートはその上に課金機能とダッシュボードを追加するのみ。
+であり、ホスティング版はその上に課金機能とダッシュボードを追加するのみ。
 
 ## クイックスタート
 

@@ -30,9 +30,10 @@ services:
       YSR_EMBEDDING_PROVIDER: local
       YSR_ONNX_MODEL_PATH: models/model.onnx
       YSR_ONNX_TOKENIZER_PATH: models/tokenizer.json
-      # Lets the hosted dashboard SPA (served from the `hosted` service's own origin) call
-      # this API cross-origin. Self-hosted deployments that never run `hosted` can leave
-      # this unset -- an empty value disables CORS entirely, same as before this existed.
+      # Lets the hosted-edition dashboard SPA (a separate product, developed in the
+      # yorishiro-enterprise repo) call this API cross-origin from its own origin. Self-hosted
+      # deployments that never run it can leave this unset -- an empty value disables CORS
+      # entirely, same as before this existed.
       YSR_CORS_ORIGINS: http://localhost:8081
       # Serves web/ (login + first-run setup wizard) from this same process at "/".
       YSR_WEB_DIR: web
@@ -41,24 +42,6 @@ services:
       YORISHIRO_MAX_TENANTS: "1"
     ports:
       - "8080:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-
-  # Hosted-only: Stripe webhooks, plan/usage metering, and the admin dashboard SPA (login,
-  # usage/billing, member management). Self-hosted deployments never need this service --
-  # only start it with `docker compose --profile hosted up` (or `make up-hosted`).
-  hosted:
-    profiles: ["hosted"]
-    build:
-      context: .
-      dockerfile: Dockerfile.hosted
-    environment:
-      DATABASE_URL: postgres://yorishiro:yorishiro@db:5432/yorishiro
-      YORISHIRO_HOSTED_BIND: 0.0.0.0:8081
-      RUST_LOG: info
-    ports:
-      - "8081:8081"
     depends_on:
       db:
         condition: service_healthy

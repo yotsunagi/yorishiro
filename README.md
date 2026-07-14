@@ -62,22 +62,22 @@ flowchart TD
   further account creation is invite-only (`admin create-invite` → `POST /auth/signup` →
   `POST /auth/login`), and tenant owners/admins can manage members over REST (`/api/members`)
   without touching the admin CLI. Stripe billing, usage metering, and the admin dashboard SPA
-  are hosted-only concerns, kept in a separate `yorishiro-hosted` crate/process/Docker image so
-  they never ship as part of, or add attack surface to, the community edition — see
-  [docs/deployment.md](docs/deployment.md#hosted-deployment).
+  are hosted-only concerns, developed as a separate product in a private repository
+  (`yotsunagi/yorishiro-enterprise`) so they never ship as part of, or add attack surface to,
+  the community edition — see [docs/deployment.md](docs/deployment.md#hosted-deployment).
 
 ## Community edition vs. hosted edition
 
 | | Community (self-hosted) | Hosted |
 |---|---|---|
-| Binary/image | `yorishiro-server` (`Dockerfile`) | `yorishiro-server` + `yorishiro-hosted-server` (`Dockerfile.hosted`) |
+| Source | This repository (public) | `yotsunagi/yorishiro-enterprise` (private) |
 | Tenants | 1 (`YORISHIRO_MAX_TENANTS=1`) | Unlimited |
 | Users per tenant | Unlimited | Unlimited |
 | Billing | None | Stripe webhook + plan caps ([docs/deployment.md](docs/deployment.md#hosted-deployment)) |
-| Admin dashboard SPA | Not started (`hosted` is an opt-in Compose profile) | `docker compose --profile hosted up` / `make up-hosted` |
+| Admin dashboard SPA | Not included (a separate hosted-only process serves it) | Included |
 
 Signup/login and `/api/members` are part of the core `yorishiro-server` API either way — the
-hosted crate only adds billing and the dashboard on top.
+hosted edition only adds billing and the dashboard on top.
 
 ## Quick start
 

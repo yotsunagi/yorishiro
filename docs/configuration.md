@@ -70,15 +70,7 @@ See [docs/embedding-providers.md](embedding-providers.md) for a worked example, 
 
 ## Hosted-only (`yorishiro-hosted-server`)
 
-These apply only to the separate `yorishiro-hosted-server` process/image (Stripe billing,
-usage metering, and the admin dashboard SPA — see
-[deployment.md](deployment.md#hosted-deployment)). Self-hosted deployments never run this
-process, so none of these are relevant there.
-
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | Same PostgreSQL connection string as `yorishiro-server` (required) |
-| `YORISHIRO_HOSTED_BIND` | Listen address (default: `0.0.0.0:8081`) |
-| `YORISHIRO_HOSTED_WEB_DIR` | Directory the admin dashboard SPA's static files are served from (default: `web`, relative to the process's working directory) |
-| `YORISHIRO_STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret. Unset (default) makes `/hosted/stripe/webhook` respond `501` instead of accepting unverifiable requests — real Stripe credentials are deliberately deferred |
-| `YORISHIRO_STRIPE_PRICE_PRO` / `YORISHIRO_STRIPE_PRICE_TEAM` | Stripe Price ids mapped to the `pro`/`team` plans (see `Plan::caps()` in `crates/yorishiro-hosted/src/plan.rs`). Unset means that plan is never resolved from a webhook |
+The separate hosted process (Stripe billing, usage metering, and the admin dashboard SPA)
+is developed in the private `yotsunagi/yorishiro-enterprise` repository, not this one — see
+[deployment.md](deployment.md#hosted-deployment). Its environment variables are documented
+there. Self-hosted deployments never run this process, so none of them are relevant here.

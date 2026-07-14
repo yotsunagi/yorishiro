@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/yorishiro-core", "crates/yorishiro-server", "crates/yorishiro-hosted"]
+members = ["crates/yorishiro-core", "crates/yorishiro-server"]
 resolver = "2"
 
 [workspace.package]
