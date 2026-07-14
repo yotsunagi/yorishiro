@@ -1,5 +1,7 @@
 mod entities;
 mod export;
+mod identity;
+mod members;
 mod relations;
 mod schemas;
 mod search;
@@ -51,6 +53,10 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        identity::signup,
+        identity::login,
+        members::list_members,
+        members::add_member,
         entities::create_entity,
         entities::get_entity,
         entities::update_entity,
@@ -71,6 +77,15 @@ impl Modify for SecurityAddon {
         export::export_jsonl,
     ),
     components(schemas(
+        identity::SignupRequest,
+        identity::SignupResponse,
+        identity::WorkspaceSummary,
+        identity::LoginRequest,
+        identity::LoginResponse,
+        members::AddMemberRequest,
+        yorishiro_core::tenancy::MembershipRole,
+        yorishiro_core::tenancy::MembershipRecord,
+        yorishiro_core::auth::ApiKeyScope,
         entities::CreateEntityRequest,
         entities::UpdateEntityRequest,
         relations::CreateRelationRequest,
@@ -80,6 +95,8 @@ impl Modify for SecurityAddon {
     modifiers(&SecurityAddon),
     security(("bearer_auth" = [])),
     tags(
+        (name = "auth", description = "Signup and login (no bearer token required)"),
+        (name = "members", description = "Tenant member management (owner/admin only)"),
         (name = "entities", description = "Entity operations"),
         (name = "relations", description = "Relation operations"),
         (name = "schemas", description = "Meta-schema operations"),
@@ -97,7 +114,24 @@ pub struct ApiDoc;
 /// that `main.rs` can merge in the MCP routes and SwaggerUi before calling
 /// `with_state` at the end.
 pub fn router() -> Router<AppState> {
+    // Signup/login are the only bearer-token-free endpoints, so they're the only ones an
+    // unauthenticated attacker can brute-force (invite tokens, passwords). Rate-limited by
+    // client IP; see `rate_limit::RateLimiter`.
+    let rate_limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::from_env());
+    let auth_routes = Router::new()
+        .route("/auth/signup", post(identity::signup))
+        .route("/auth/login", post(identity::login))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            crate::rate_limit::enforce,
+        ));
+
     Router::new()
+        .merge(auth_routes)
+        .route(
+            "/api/members",
+            post(members::add_member).get(members::list_members),
+        )
         .route(
             "/api/entities",
             post(entities::create_entity).get(entities::list_entities),

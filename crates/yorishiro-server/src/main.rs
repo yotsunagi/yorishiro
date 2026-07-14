@@ -21,6 +21,7 @@ mod error;
 mod health;
 mod logging;
 mod mcp;
+mod rate_limit;
 mod rest;
 mod state;
 mod whoami;
@@ -62,25 +63,31 @@ async fn main() -> Result<()> {
     let bind_addr = std::env::var("YSR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
 
     // Migrations need admin privileges (CREATE ROLE/GRANT/ALTER TABLE, etc.), so they run on
-    // a throwaway admin pool, before switching to the RLS-enforced role via `SET ROLE`. It's
-    // dropped afterward; all request handling from here on goes through `tenant_db` (the
-    // yorishiro_app role).
-    {
-        let admin_pool = sqlx::PgPool::connect(&database_url).await?;
-        sqlx::migrate!("../../migrations").run(&admin_pool).await?;
-    }
+    // the admin pool, before request handling switches to the RLS-enforced role via
+    // `SET ROLE`. That admin pool is kept (as `identity_pool`) rather than dropped: a handful
+    // of control-plane endpoints (signup/login/invite redemption) need it too, since they
+    // touch `identity.users`/`identity.tenant_memberships`/`identity.invites` before any
+    // tenant/workspace context exists to scope `yorishiro_app`'s RLS-restricted access by (see
+    // `AppState::identity_pool`'s doc comment). Everything else goes through `tenant_db`.
+    let identity_pool = sqlx::PgPool::connect(&database_url).await?;
+    sqlx::migrate!("../../migrations")
+        .run(&identity_pool)
+        .await?;
 
     let tenant_db = TenantDb::connect(&database_url, 20).await?;
     let embedding_provider = build_embedding_provider()?;
-    let state = AppState::new(tenant_db, embedding_provider);
+    let state = AppState::new(tenant_db, identity_pool, embedding_provider);
     let embedding_tasks = state.embedding_tasks().clone();
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {bind_addr}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     // After closing HTTP, wait for the embedding sync of already-written entities to finish.
     // Exiting immediately without waiting would leave recently created entities permanently
@@ -241,6 +248,7 @@ mod tests {
     use uuid::Uuid;
     use yorishiro_core::YorishiroError;
     use yorishiro_core::auth::{ApiKeyScope, create_api_key};
+    use yorishiro_core::tenancy;
 
     use super::*;
 
@@ -262,7 +270,11 @@ mod tests {
     }
 
     fn test_state(pool: PgPool) -> AppState {
-        AppState::new(TenantDb::new(pool), Arc::new(UnreachableEmbeddingProvider))
+        AppState::new(
+            TenantDb::new(pool.clone()),
+            pool,
+            Arc::new(UnreachableEmbeddingProvider),
+        )
     }
 
     /// A provider that returns a deterministic vector, for end-to-end tests of the embedding
@@ -347,7 +359,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let response = app
             .oneshot(
                 Request::builder()
@@ -603,7 +619,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -648,7 +668,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -773,7 +797,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
 
         let response = rest_request(
             &app,
@@ -806,7 +834,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -911,7 +943,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(FixedEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(FixedEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1003,7 +1039,11 @@ mod tests {
             .unwrap();
         drop(conn_b);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth_a = format!("Bearer {}", schema_key_a.plaintext);
         let write_auth_a = format!("Bearer {}", write_key_a.plaintext);
         let read_auth_b = format!("Bearer {}", read_key_b.plaintext);
@@ -1135,7 +1175,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1247,7 +1291,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1382,7 +1430,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
 
         let response = rest_request(&app, "GET", "/api/templates", Some(&schema_auth), None).await;
@@ -1431,7 +1483,11 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(db, Arc::new(UnreachableEmbeddingProvider)));
+        let app = build_app(AppState::new(
+            db,
+            pool.clone(),
+            Arc::new(UnreachableEmbeddingProvider),
+        ));
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1510,6 +1566,364 @@ mod tests {
         assert_eq!(lines.iter().filter(|l| l["kind"] == "relation").count(), 1);
 
         let response = rest_request(&app, "GET", "/api/export.jsonl", None, None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn signup_consumes_invite_and_creates_membership(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let (_invite, token) = tenancy::create_invite(
+            &pool,
+            tenant.id,
+            "new@example.com",
+            tenancy::MembershipRole::Member,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let app = build_app(test_state(pool.clone()));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/signup",
+            None,
+            Some(serde_json::json!({
+                "invite_token": token,
+                "password": "hunter2-hunter2",
+                "display_name": "New Member",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = rest_json_body(response).await;
+        assert_eq!(body["email"], "new@example.com");
+        assert_eq!(body["tenant_id"], tenant.id.to_string());
+        assert_eq!(body["role"], "member");
+        assert_eq!(body["workspaces"][0]["id"], workspace.id.to_string());
+
+        let role = tenancy::get_membership_role(
+            &pool,
+            tenant.id,
+            Uuid::parse_str(body["user_id"].as_str().unwrap()).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(role, Some(tenancy::MembershipRole::Member));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn signup_rejects_an_already_used_invite_token(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let (_invite, token) = tenancy::create_invite(
+            &pool,
+            tenant.id,
+            "reuse@example.com",
+            tenancy::MembershipRole::Member,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let app = build_app(test_state(pool));
+        let signup_body = Some(serde_json::json!({
+            "invite_token": token,
+            "password": "hunter2-hunter2",
+        }));
+
+        let response = rest_request(&app, "POST", "/auth/signup", None, signup_body.clone()).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = rest_request(&app, "POST", "/auth/signup", None, signup_body).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn login_issues_an_api_key_scoped_to_the_members_role(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let (_invite, token) = tenancy::create_invite(
+            &pool,
+            tenant.id,
+            "member@example.com",
+            tenancy::MembershipRole::Member,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let app = build_app(test_state(pool));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/signup",
+            None,
+            Some(serde_json::json!({
+                "invite_token": token,
+                "password": "hunter2-hunter2",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/login",
+            None,
+            Some(serde_json::json!({
+                "email": "member@example.com",
+                "password": "hunter2-hunter2",
+                "workspace_id": workspace.id,
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = rest_json_body(response).await;
+        assert_eq!(body["scope"], "write");
+        let api_key = body["api_key"].as_str().unwrap();
+
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/entities",
+            Some(&format!("Bearer {api_key}")),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn login_rejects_an_incorrect_password(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        tenancy::create_user(&pool, "someone@example.com", "correct-horse", None)
+            .await
+            .unwrap();
+
+        let app = build_app(test_state(pool));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/login",
+            None,
+            Some(serde_json::json!({
+                "email": "someone@example.com",
+                "password": "wrong-password",
+                "workspace_id": workspace.id,
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn auth_endpoints_are_rate_limited_per_caller(pool: PgPool) {
+        let app = build_app(test_state(pool));
+
+        // The test driver never populates `ConnectInfo`, so every call here falls back to the
+        // same shared bucket -- exercising the same "no requester info" path a request behind
+        // an unconfigured proxy would take, while still proving the middleware is wired in.
+        let mut saw_too_many_requests = false;
+        for _ in 0..15 {
+            let response = rest_request(
+                &app,
+                "POST",
+                "/auth/login",
+                None,
+                Some(serde_json::json!({
+                    "email": "nobody@example.com",
+                    "password": "wrong",
+                    "workspace_id": Uuid::nil(),
+                })),
+            )
+            .await;
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                saw_too_many_requests = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_too_many_requests,
+            "expected /auth/login to start returning 429 after repeated calls from the same caller"
+        );
+    }
+
+    /// Issues an API key attributed to `user_id`, scoped to `role`'s max scope -- exactly what
+    /// `/auth/login` would hand out for that role.
+    async fn issue_key_for(
+        pool: &PgPool,
+        tenant_id: Uuid,
+        workspace_id: Uuid,
+        user_id: Uuid,
+        role: tenancy::MembershipRole,
+    ) -> String {
+        let db = TenantDb::new(pool.clone());
+        let mut conn = db
+            .acquire_for_workspace(tenant_id, workspace_id)
+            .await
+            .unwrap();
+        create_api_key(&mut conn, workspace_id, role.max_scope(), Some(user_id))
+            .await
+            .unwrap()
+            .plaintext
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_can_list_and_add_members(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let owner = tenancy::create_user(&pool, "owner@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant.id, owner.id, tenancy::MembershipRole::Owner)
+            .await
+            .unwrap();
+        let owner_key = issue_key_for(
+            &pool,
+            tenant.id,
+            workspace.id,
+            owner.id,
+            tenancy::MembershipRole::Owner,
+        )
+        .await;
+
+        // The invitee must already have an account before they can be added by email.
+        let invitee = tenancy::create_user(&pool, "invitee@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+
+        let app = build_app(test_state(pool.clone()));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/members",
+            Some(&format!("Bearer {owner_key}")),
+            Some(serde_json::json!({
+                "email": "invitee@example.com",
+                "role": "member",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = rest_json_body(response).await;
+        assert_eq!(body["user_id"], invitee.id.to_string());
+        assert_eq!(body["role"], "member");
+
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/members",
+            Some(&format!("Bearer {owner_key}")),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = rest_json_body(response).await;
+        let emails: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["email"].as_str().unwrap())
+            .collect();
+        assert!(emails.contains(&"owner@example.com"));
+        assert!(emails.contains(&"invitee@example.com"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_rejects_an_email_with_no_account(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let owner = tenancy::create_user(&pool, "owner@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant.id, owner.id, tenancy::MembershipRole::Owner)
+            .await
+            .unwrap();
+        let owner_key = issue_key_for(
+            &pool,
+            tenant.id,
+            workspace.id,
+            owner.id,
+            tenancy::MembershipRole::Owner,
+        )
+        .await;
+
+        let app = build_app(test_state(pool));
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/api/members",
+            Some(&format!("Bearer {owner_key}")),
+            Some(serde_json::json!({
+                "email": "nobody@example.com",
+                "role": "member",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn member_role_cannot_manage_members(pool: PgPool) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let member = tenancy::create_user(&pool, "member@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant.id, member.id, tenancy::MembershipRole::Member)
+            .await
+            .unwrap();
+        let member_key = issue_key_for(
+            &pool,
+            tenant.id,
+            workspace.id,
+            member.id,
+            tenancy::MembershipRole::Member,
+        )
+        .await;
+
+        let app = build_app(test_state(pool));
+
+        let response = rest_request(
+            &app,
+            "GET",
+            "/api/members",
+            Some(&format!("Bearer {member_key}")),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn members_endpoints_require_authentication(pool: PgPool) {
+        let app = build_app(test_state(pool));
+
+        let response = rest_request(&app, "GET", "/api/members", None, None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
