@@ -3,8 +3,8 @@
 // entity/schema/relation browser -- that's what the REST API + Swagger UI (`/docs` on
 // yorishiro-server) are for. Served by both yorishiro-server (via `YSR_WEB_DIR`) and
 // yorishiro-hosted-server -- `/hosted/tenant/overview` and friends only exist on the latter, so
-// yorishiro-server alone never reaches `#/dashboard` in practice; it stops at the setup-complete
-// screen instead.
+// on yorishiro-server alone, `#/dashboard` degrades to just showing the API key login just
+// issued (see `renderLoginComplete`) instead of the full dashboard.
 
 const SESSION_KEY = "yorishiro_session";
 
@@ -86,7 +86,9 @@ async function fetchTenantOverview(apiKey) {
     headers: { authorization: `Bearer ${apiKey}` },
   });
   if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+    const error = new Error(await parseErrorMessage(response));
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -203,6 +205,31 @@ function renderLogin(errorMessage) {
   return view;
 }
 
+function renderLoginComplete(session) {
+  const view = el(`
+    <div>
+      <div class="top-bar">
+        <h1>Signed in</h1>
+        <button class="secondary" id="logout-button">Sign out</button>
+      </div>
+      <p class="hint">This is the community edition, which has no dashboard here -- use the API key
+      below as a Bearer token against the REST API (see <a href="/docs">/docs</a>) or your MCP
+      client's configuration.</p>
+      <dl>
+        <dt>Email</dt><dd>${session.email}</dd>
+      </dl>
+      <pre>${session.apiKey}</pre>
+    </div>
+  `);
+
+  view.querySelector("#logout-button").addEventListener("click", () => {
+    clearSession();
+    location.hash = "#/login";
+  });
+
+  return view;
+}
+
 function renderMembersTable(members) {
   const rows = members
     .map(
@@ -295,6 +322,13 @@ async function renderDashboard() {
     const overview = await fetchTenantOverview(session.apiKey);
     mount(renderDashboardShell(overview));
   } catch (err) {
+    if (err.status === 404) {
+      // Not a session failure -- this deployment is yorishiro-server (community edition),
+      // which has no /hosted/tenant/overview endpoint. The session (and the API key login
+      // just issued) is still valid.
+      mount(renderLoginComplete(session));
+      return;
+    }
     clearSession();
     mount(renderLogin(`session expired: ${err.message}`));
   }
