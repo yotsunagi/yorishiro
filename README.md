@@ -111,7 +111,7 @@ user/API key provisioning, and auth model.
 | [docs/schema.md](docs/schema.md) | Meta-schema guide for defining entity types and relations |
 | [docs/api.md](docs/api.md) | REST API and MCP tool reference |
 | [docs/embedding-providers.md](docs/embedding-providers.md) | Configuring embedding providers (`local` ONNX / `openai`-compatible) |
-| [docs/configuration.md](docs/configuration.md) | Environment variable reference |
+| [docs/configuration.md](docs/configuration.md) | Environment variable / `config.yml` reference |
 | [docs/deployment.md](docs/deployment.md) | Production deployment guide |
 | [docs/operations.md](docs/operations.md) | Operational notes: backups, rate limiting, observability |
 

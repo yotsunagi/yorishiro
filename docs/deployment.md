@@ -60,7 +60,7 @@ $ curl -L -o .env https://raw.githubusercontent.com/yotsunagi/yorishiro/vX.Y.Z/.
 
 Edit `.env` to set at least `DATABASE_URL`. Everything else can be left commented out: `YSR_WEB_DIR`, `YORISHIRO_MAX_TENANTS`, and `YSR_EMBEDDING_PROVIDER` (plus the ONNX model/tokenizer paths) all already default to the single-tenant, web-UI-enabled, local-ONNX-embedding values a self-hosted deployment normally wants, matching the files fetched above — see [configuration.md](configuration.md) for the full reference and how to change any of them.
 
-The binary reads configuration only from the real process environment — it never reads a `.env` file itself — so running it directly means loading `.env` into the shell first:
+The binary reads configuration only from the real process environment — it never reads a `.env` file itself — so running it directly means loading `.env` into the shell first. A `config.yml` file, on the other hand, *is* read directly by the binary (see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml)) — for a bare-metal/systemd deployment like this one, dropping a `config.yml` next to the binary is often simpler than either of the two `.env`-loading mechanisms below, since it needs no shell sourcing and no `EnvironmentFile=`:
 
 ```console
 $ set -a; source .env; set +a

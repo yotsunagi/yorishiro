@@ -50,7 +50,7 @@ $ curl -L -o .env https://raw.githubusercontent.com/yotsunagi/yorishiro/vX.Y.Z/.
 
 `.env`を編集し、最低限`DATABASE_URL`を設定してください。それ以外はコメントアウトのままで構いません — `YSR_WEB_DIR`・`YORISHIRO_MAX_TENANTS`・`YSR_EMBEDDING_PROVIDER`(とONNXモデル/トークナイザーのパス)は全て、セルフホスト環境が通常望むシングルテナント・Web UI有効・ローカルONNX埋め込みの値を既定としており、上で取得したファイルとも一致します — 全変数のリファレンスと変更方法は[configuration.md](configuration.md)を参照してください。
 
-このバイナリは実際のプロセス環境変数からしか設定を読みません — `.env`ファイル自体を読む仕組みはありません — そのため直接実行する場合は、まず`.env`をシェルに読み込む必要があります:
+このバイナリは実際のプロセス環境変数からしか設定を読みません — `.env`ファイル自体を読む仕組みはありません — そのため直接実行する場合は、まず`.env`をシェルに読み込む必要があります。一方`config.yml`ファイルはバイナリが直接読み込みます（[configuration.md](configuration.md#configyml)と[`config.example.yml`](../../config.example.yml)を参照）— 今回のようなベアメタル/systemdデプロイでは、バイナリの隣に`config.yml`を置くだけで済むため、下記の2通りの`.env`読み込み方法よりシンプルなことが多いです（シェルでのsourceも`EnvironmentFile=`も不要）:
 
 ```console
 $ set -a; source .env; set +a

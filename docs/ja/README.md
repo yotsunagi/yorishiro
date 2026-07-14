@@ -106,7 +106,7 @@ $ make init
 | [docs/ja/schema.md](schema.md) | エンティティ型・リレーションを定義するメタスキーマガイド |
 | [docs/ja/api.md](api.md) | REST APIとMCPツールのリファレンス |
 | [docs/ja/embedding-providers.md](embedding-providers.md) | 埋め込みプロバイダの設定（ローカル`local` ONNX / `openai`互換） |
-| [docs/ja/configuration.md](configuration.md) | 環境変数リファレンス |
+| [docs/ja/configuration.md](configuration.md) | 環境変数/`config.yml`リファレンス |
 | [docs/ja/deployment.md](deployment.md) | 本番デプロイ手順 |
 | [docs/ja/operations.md](operations.md) | 運用上の注意（バックアップ・レート制限・可観測性） |
 

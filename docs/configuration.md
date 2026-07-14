@@ -7,6 +7,18 @@ Variables are passed to the server **as process environment variables** — ther
 mechanism that automatically reads a `.env` file. Set them via `environment:` in
 docker compose, `docker compose exec -e`, `Environment=` in systemd, or similar.
 
+## config.yml
+
+Every setting below can also go in a `config.yml` file instead — see
+[`config.example.yml`](../config.example.yml) for the full key list (nested under `embedding:`,
+`logging:`, and `auth_rate_limit:` for those groups). By default the server looks for
+`config.yml` in its working directory; set `YSR_CONFIG_PATH` to point elsewhere. A missing file,
+or a missing key within it, is not an error — that setting just falls back to its usual default.
+**A set environment variable always wins over the equivalent `config.yml` key.** This makes
+`config.yml` convenient as the base configuration for a deployment, with environment variables
+reserved for one-off overrides (e.g. a Docker `-e` flag for a single run) rather than the only
+way to configure anything.
+
 ## Core
 
 | Variable | Description |

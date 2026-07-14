@@ -26,6 +26,11 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
 
 これだけでシングルテナント構成として完全に動作します。`YSR_WEB_DIR`（`web/`からWeb UIを配信）、`YORISHIRO_MAX_TENANTS`（このデプロイをテナント1つに制限）、`YSR_EMBEDDING_PROVIDER`（上でマウントした`models/model.onnx`/`models/tokenizer.json`を使うローカルONNXモデル）は全て既定でこの値になっているためです。変更方法は[configuration.md](configuration.md)を参照してください。
 
+上記の`-e`/環境変数はすべて`config.yml`ファイルでも指定できます（上のDockerイメージなら
+`/app/config.yml`にマウントしてください）。デプロイの基本設定を長い`-e`の羅列で書くより
+便利なことが多いです — [configuration.md](configuration.md#configyml)と
+[`config.example.yml`](../../config.example.yml)を参照してください。
+
 Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド起動を
 含む）やソースからのビルドは[deployment.md](deployment.md)を参照してください。ローカル開発
 であれば、必要なもの: Docker / Docker Compose / make。`make init`でイメージをビルドし（上記の

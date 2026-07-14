@@ -4,6 +4,8 @@ use yorishiro_core::db::TenantDb;
 use yorishiro_server::admin::{self, AdminCommand};
 use yorishiro_server::{AppState, build_app, build_embedding_provider, logging, shutdown_signal};
 
+mod config;
+
 /// A plain start (`yorishiro-server`, no subcommand) runs the HTTP server; `yorishiro-server
 /// admin ...` runs one-off administrative commands instead.
 #[derive(Parser)]
@@ -22,19 +24,34 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Community-edition default: a single-tenant deployment unless the operator opts into more
-    // (set YORISHIRO_MAX_TENANTS=0 for unlimited, or a higher count). Set before parsing the CLI
-    // so `admin create-tenant` enforces the same default as the HTTP server. Safe to mutate here:
-    // this runs before any other thread (tokio runtime, etc.) is spawned.
-    if std::env::var_os("YORISHIRO_MAX_TENANTS").is_none() {
-        unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", "1") };
+fn main() -> Result<()> {
+    // Synchronous prologue: `config::load_and_apply_env_overrides` and the `YORISHIRO_MAX_TENANTS`
+    // default both call `std::env::set_var`, which is unsound under concurrent env access. Doing
+    // both here, before the tokio runtime (and its worker threads) starts, is what makes them
+    // sound -- nothing else touches the environment yet.
+    //
+    // SAFETY: no other thread exists at this point in `main`.
+    unsafe {
+        config::load_and_apply_env_overrides()?;
+        // Community-edition default: a single-tenant deployment unless the operator opts into
+        // more (set YORISHIRO_MAX_TENANTS=0 for unlimited, or a higher count). Set before parsing
+        // the CLI so `admin create-tenant` enforces the same default as the HTTP server.
+        if std::env::var_os("YORISHIRO_MAX_TENANTS").is_none() {
+            std::env::set_var("YORISHIRO_MAX_TENANTS", "1");
+        }
     }
 
+    let cli = Cli::parse();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
     // The admin CLI prints for a human, so branch to it before initializing JSON-formatted
     // tracing.
-    let cli = Cli::parse();
     if let Some(Command::Admin { command }) = cli.command {
         return admin::run(command).await;
     }

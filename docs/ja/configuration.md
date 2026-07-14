@@ -7,6 +7,16 @@
 docker composeの`environment:`や`docker compose exec -e`、systemdの`Environment=`などで
 設定します）。
 
+以下の設定はすべて`config.yml`ファイルでも指定できます — キー一覧は
+[`config.example.yml`](../../config.example.yml)を参照してください（`embedding:`・`logging:`・
+`auth_rate_limit:`はグループごとにネストします）。デフォルトでは作業ディレクトリの
+`config.yml`を読み込みます。別の場所を使う場合は`YSR_CONFIG_PATH`で指定してください。
+ファイルが存在しない場合や、ファイル内に該当キーがない場合はエラーにならず、通常の
+デフォルト値にフォールバックします。**環境変数が設定されている場合は、対応する
+`config.yml`のキーより常に優先されます。** これにより、`config.yml`をデプロイの基本設定
+として使い、環境変数は（1回限りのDocker `-e`オプションなど）一時的な上書き用途に
+限定する、という使い方ができます。
+
 ## 基本
 
 | 変数 | 内容 |

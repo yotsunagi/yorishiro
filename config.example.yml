@@ -1,0 +1,40 @@
+# Optional alternative to .env.example. Every setting below has an equivalent environment
+# variable (named in the comments); a set environment variable always wins over the value here.
+# Copy this file to config.yml (or point YSR_CONFIG_PATH elsewhere) and fill in what you need --
+# a missing file, or a missing key within it, is not an error.
+
+# database_url: postgres://yorishiro:yorishiro@localhost:5432/yorishiro  # DATABASE_URL
+# bind: 0.0.0.0:8080                                                    # YSR_BIND
+# cors_origins: ""                                                      # YSR_CORS_ORIGINS
+
+# Deployment-wide cap on the number of tenants `admin create-tenant` may create. Defaults to 1
+# (single-tenant) if unset -- set to 0 for unlimited, or to a higher number to allow that many
+# tenants. See .env.example for the full explanation (same setting, YORISHIRO_MAX_TENANTS).
+# max_tenants: 1
+
+# Directory the setup/login web UI's static files are served from at "/". Defaults to `web`.
+# web_dir: web                                                          # YSR_WEB_DIR
+
+# rust_log: info                                                        # RUST_LOG
+
+# auth_rate_limit:
+#   max: 10                                                             # YSR_AUTH_RATE_LIMIT_MAX
+#   window_secs: 60                                                     # YSR_AUTH_RATE_LIMIT_WINDOW_SECS
+
+# embedding:
+#   provider: local                                                     # YSR_EMBEDDING_PROVIDER
+#   dimensions: 768                                                     # YSR_EMBEDDING_DIMENSIONS
+#   # --- when provider: local (768-dimensional BERT-family ONNX export, the default) ---
+#   onnx_model_path: models/model.onnx                                  # YSR_ONNX_MODEL_PATH
+#   onnx_tokenizer_path: models/tokenizer.json                          # YSR_ONNX_TOKENIZER_PATH
+#   onnx_max_sequence_length: 512                                       # YSR_ONNX_MAX_SEQUENCE_LENGTH
+#   # --- when provider: openai (e.g. Ollama, LM Studio, OpenAI) ---
+#   base_url: http://localhost:11434/v1                                 # YSR_EMBEDDING_BASE_URL
+#   model: nomic-embed-text                                             # YSR_EMBEDDING_MODEL
+#   api_key: ""                                                         # YSR_EMBEDDING_API_KEY
+#   send_dimensions_param: true                                         # YSR_EMBEDDING_SEND_DIMENSIONS_PARAM
+
+# logging:
+#   target: stdout                                                      # YSR_LOG_TARGET (stdout | single | daily | syslog)
+#   dir: .                                                               # YSR_LOG_DIR (when target: single or daily)
+#   syslog_socket: /dev/log                                             # YSR_SYSLOG_SOCKET (when target: syslog)

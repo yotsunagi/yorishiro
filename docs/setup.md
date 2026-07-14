@@ -29,6 +29,8 @@ $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
 
 This is a complete, working single-tenant deployment as-is: `YSR_WEB_DIR` (serves the web UI from `web/`), `YORISHIRO_MAX_TENANTS` (caps this deployment at one tenant), and `YSR_EMBEDDING_PROVIDER` (uses the local ONNX model at `models/model.onnx`/`models/tokenizer.json`, matching the volume mounted above) all already default to that. See [configuration.md](configuration.md) to change any of them, or [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker (including background/systemd operation), or for building from source. For local development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same multi-stage `Dockerfile` the release image is built from) and starts PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider configured above:
 
+Every `-e`/environment variable above can go in a `config.yml` file instead (mount it at `/app/config.yml` for the Docker image above), which is often more convenient than a long list of `-e` flags for a deployment's baseline configuration — see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml).
+
 ```console
 $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
 # (place models/model.onnx and models/tokenizer.json as above)
