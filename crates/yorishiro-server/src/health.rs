@@ -98,7 +98,7 @@ mod tests {
             pool,
             std::sync::Arc::new(UnreachableEmbeddingProvider),
         );
-        let app = build_app(state);
+        let app = build_app(state, None);
 
         app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await

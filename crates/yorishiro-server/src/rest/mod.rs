@@ -5,6 +5,7 @@ mod members;
 mod relations;
 mod schemas;
 mod search;
+mod setup;
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -55,6 +56,8 @@ impl Modify for SecurityAddon {
     paths(
         identity::signup,
         identity::login,
+        setup::status,
+        setup::setup,
         members::list_members,
         members::add_member,
         entities::create_entity,
@@ -82,6 +85,9 @@ impl Modify for SecurityAddon {
         identity::WorkspaceSummary,
         identity::LoginRequest,
         identity::LoginResponse,
+        setup::SetupStatusResponse,
+        setup::SetupRequest,
+        setup::SetupResponse,
         members::AddMemberRequest,
         yorishiro_core::tenancy::MembershipRole,
         yorishiro_core::tenancy::MembershipRecord,
@@ -121,6 +127,8 @@ pub fn router() -> Router<AppState> {
     let auth_routes = Router::new()
         .route("/auth/signup", post(identity::signup))
         .route("/auth/login", post(identity::login))
+        .route("/setup", post(setup::setup))
+        .route("/setup/status", get(setup::status))
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
             crate::rate_limit::enforce,

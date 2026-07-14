@@ -1,7 +1,10 @@
-// Yorishiro hosted admin dashboard -- a deliberately framework-free SPA. Scope is limited to
-// login, usage/billing display, and member management (see task #54); it is not a general
+// Yorishiro admin dashboard -- a deliberately framework-free SPA. Scope is limited to first-run
+// setup, login, usage/billing display, and member management; it is not a general
 // entity/schema/relation browser -- that's what the REST API + Swagger UI (`/docs` on
-// yorishiro-server) are for.
+// yorishiro-server) are for. Served by both yorishiro-server (community edition, via
+// `YSR_WEB_DIR`) and yorishiro-hosted-server -- `/hosted/tenant/overview` and friends only exist
+// on the latter, so the community edition never reaches `#/dashboard` in practice; it stops at
+// the setup-complete screen instead.
 
 const SESSION_KEY = "yorishiro_session";
 
@@ -42,6 +45,30 @@ async function parseErrorMessage(response) {
   }
 }
 
+async function checkSetupStatus() {
+  try {
+    const response = await fetch(`${apiBase()}/setup/status`);
+    if (!response.ok) {
+      return { setup_required: false };
+    }
+    return response.json();
+  } catch {
+    return { setup_required: false };
+  }
+}
+
+async function setup({ email, password, displayName }) {
+  const response = await fetch(`${apiBase()}/setup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password, display_name: displayName || undefined }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+  return response.json();
+}
+
 async function login({ email, password, workspaceId }) {
   const response = await fetch(`${apiBase()}/auth/login`, {
     method: "POST",
@@ -79,11 +106,67 @@ async function addMember(apiKey, { email, role }) {
   return response.json();
 }
 
+function renderSetup(errorMessage) {
+  const view = el(`
+    <div>
+      <h1>Welcome to Yorishiro</h1>
+      <p class="hint">This deployment has no tenant yet. Create the owner account to get started.</p>
+      <form id="setup-form">
+        <label>Email
+          <input type="email" name="email" required autocomplete="username">
+        </label>
+        <label>Password
+          <input type="password" name="password" required autocomplete="new-password" minlength="8">
+        </label>
+        <label>Display name (optional)
+          <input type="text" name="displayName" autocomplete="name">
+        </label>
+        ${errorMessage ? `<p class="error">${errorMessage}</p>` : ""}
+        <button type="submit">Create owner account</button>
+      </form>
+    </div>
+  `);
+
+  view.querySelector("#setup-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    try {
+      const result = await setup({
+        email: form.get("email"),
+        password: form.get("password"),
+        displayName: form.get("displayName"),
+      });
+      mount(renderSetupComplete(result));
+    } catch (err) {
+      mount(renderSetup(err.message));
+    }
+  });
+
+  return view;
+}
+
+function renderSetupComplete(result) {
+  return el(`
+    <div>
+      <h1>Setup complete</h1>
+      <p class="hint">The tenant, workspace, and owner account have been created.</p>
+      <dl>
+        <dt>Email</dt><dd>${result.email}</dd>
+        <dt>Workspace ID</dt><dd><code>${result.workspace_id}</code></dd>
+      </dl>
+      <p class="error"><strong>Save this API key now -- it is only ever shown once:</strong></p>
+      <pre>${result.api_key}</pre>
+      <p class="hint">Use it as a Bearer token against the REST API (see <a href="/docs">/docs</a>) or your MCP client's configuration.</p>
+      <p><a href="#/login">Continue to sign in</a></p>
+    </div>
+  `);
+}
+
 function renderLogin(errorMessage) {
   const view = el(`
     <div>
-      <h1>Yorishiro Hosted Dashboard</h1>
-      <p class="hint">Sign in with the account created via an invite (see /auth/signup).</p>
+      <h1>Yorishiro</h1>
+      <p class="hint">Sign in with the account created via setup or an invite (see /auth/signup).</p>
       <form id="login-form">
         <label>Email
           <input type="email" name="email" required autocomplete="username">
@@ -217,13 +300,24 @@ async function renderDashboard() {
   }
 }
 
-function router() {
+async function router() {
   const hash = location.hash || "#/login";
   if (hash === "#/dashboard") {
     renderDashboard();
-  } else {
-    mount(renderLogin());
+    return;
   }
+
+  const status = await checkSetupStatus();
+  if (status.setup_required && hash !== "#/setup") {
+    location.hash = "#/setup";
+    return;
+  }
+  if (!status.setup_required && hash === "#/setup") {
+    location.hash = "#/login";
+    return;
+  }
+
+  mount(hash === "#/setup" ? renderSetup() : renderLogin());
 }
 
 window.addEventListener("hashchange", router);

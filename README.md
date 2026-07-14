@@ -56,12 +56,14 @@ flowchart TD
   active when they were created.
 - **Community / hosted split**: everything above ships in the single `yorishiro-server`
   binary (the community edition) and is all a self-hosted operator needs — set
-  `YORISHIRO_MAX_TENANTS=1` to keep it single-tenant. Account creation is invite-only
-  (`admin create-invite` → `POST /auth/signup` → `POST /auth/login`), and tenant owners/admins
-  can manage members over REST (`/api/members`) without touching the admin CLI. Stripe
-  billing, usage metering, and the admin dashboard SPA are hosted-only concerns, kept in a
-  separate `yorishiro-hosted` crate/process/Docker image so they never ship as part of, or
-  add attack surface to, the community edition — see
+  `YORISHIRO_MAX_TENANTS=1` to keep it single-tenant. The same setting also enables a
+  first-run setup wizard (browser UI at `/`, or `POST /setup`) that creates the tenant,
+  workspace, and owner account in one step — no admin CLI needed. Beyond that first account,
+  further account creation is invite-only (`admin create-invite` → `POST /auth/signup` →
+  `POST /auth/login`), and tenant owners/admins can manage members over REST (`/api/members`)
+  without touching the admin CLI. Stripe billing, usage metering, and the admin dashboard SPA
+  are hosted-only concerns, kept in a separate `yorishiro-hosted` crate/process/Docker image so
+  they never ship as part of, or add attack surface to, the community edition — see
   [docs/deployment.md](docs/deployment.md#hosted-deployment).
 
 ## Community edition vs. hosted edition
@@ -100,9 +102,10 @@ $ curl -L -o models/tokenizer.json \
 $ make init
 ```
 
-Migrations are applied automatically on startup. See [docs/setup.md](docs/setup.md) for
-the full setup guide, endpoint list, tenant/workspace/user/API key provisioning, and auth
-model.
+Migrations are applied automatically on startup. Visit `http://localhost:8080/` to create
+the owner account through the setup wizard — no admin CLI needed. See
+[docs/setup.md](docs/setup.md) for the full setup guide, endpoint list, tenant/workspace/
+user/API key provisioning, and auth model.
 
 ## Documentation
 

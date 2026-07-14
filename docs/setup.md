@@ -31,10 +31,38 @@ Migrations are applied automatically on startup. Endpoints:
 |---|---|
 | `http://localhost:8080/up` | Liveness probe (always 200 if the process is running; no dependency checks) |
 | `http://localhost:8080/health` | Readiness check (also probes DB connectivity; 503 on outage) |
+| `http://localhost:8080/` | Setup/login web UI (only when `YSR_WEB_DIR` is set — see below) |
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
 | `http://localhost:8080/whoami` | Authentication check (returns workspace, tenant, and scope) |
+
+## First-run setup (community edition)
+
+Community-edition deployments (`YORISHIRO_MAX_TENANTS` set — `docker-compose.yml`'s `app`
+service does this and also sets `YSR_WEB_DIR=web`) serve a setup wizard at
+`http://localhost:8080/` — no admin CLI needed. On first visit, since no tenant exists yet,
+the browser shows a form asking only for an email and password; submitting it creates the
+tenant, its `default` workspace, and an owner account in one step, and displays the freshly
+issued API key (shown only once, same as every other key in this system). Visiting the same
+page afterward shows a login form instead.
+
+The same flow is available without a browser:
+
+```console
+$ curl localhost:8080/setup/status
+{"setup_required":true}
+$ curl -X POST localhost:8080/setup -H "Content-Type: application/json" \
+    -d '{"email":"owner@example.com","password":"a strong password"}'
+{"user_id":"...","email":"owner@example.com","tenant_id":"...","workspace_id":"...",
+ "api_key":"ysr_..."}
+```
+
+`POST /setup` returns `404` once a tenant already exists, or on any deployment where
+`YORISHIRO_MAX_TENANTS` is unset — hosted deployments onboard tenants via signup/invite
+instead (see [Signup, login, and member management](#signup-login-and-member-management)).
+The admin CLI below remains available for anything the wizard doesn't cover: additional
+workspaces/tenants, invites, and key rotation.
 
 ## Tenants, workspaces, and users
 
@@ -62,6 +90,11 @@ deployments should set `YORISHIRO_MAX_TENANTS=1` (see
 can never create a second one; leave it unset for a hosted deployment serving many tenants.
 
 ## Provisioning tenants, workspaces, and API keys
+
+Community-edition deployments can skip this section and use the setup wizard above instead
+for their first (and, per `YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to
+provision *additional* tenants/workspaces, and the only way to provision anything at all on a
+hosted deployment (`YORISHIRO_MAX_TENANTS` unset).
 
 API keys are stored in the database only as SHA-256 hashes and user passwords only as
 argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:

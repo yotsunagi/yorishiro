@@ -14,8 +14,9 @@ docker compose, `docker compose exec -e`, `Environment=` in systemd, or similar.
 | `DATABASE_URL` | PostgreSQL connection string (required) |
 | `YSR_BIND` | Listen address (default: `0.0.0.0:8080`) |
 | `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access (e.g. so a browser-based dashboard on a different origin can call `/auth/login`/`/api/members`). Cross-origin reads are disabled if unset |
-| `YORISHIRO_MAX_TENANTS` | Deployment-wide cap on the number of tenants `admin create-tenant` may create. Unset (default) means unlimited. Self-hosted (community) deployments should set this to `1`; hosted deployments should leave it unset. `POST /auth/signup` never creates a tenant (it only redeems an invite into an *existing* one), so it is unaffected |
-| `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | Per-client-IP rate limit on `/auth/signup` and `/auth/login` — the only two endpoints reachable without a bearer token, and therefore the only ones an unauthenticated caller can brute-force. Defaults: 10 requests per 60 seconds |
+| `YORISHIRO_MAX_TENANTS` | Deployment-wide cap on the number of tenants `admin create-tenant` may create. Unset (default) means unlimited. Self-hosted (community) deployments should set this to `1`; hosted deployments should leave it unset. `POST /auth/signup` never creates a tenant (it only redeems an invite into an *existing* one), so it is unaffected. This is also what gates the first-run setup wizard (`GET`/`POST /setup`, see [setup.md](setup.md#first-run-setup-community-edition)) — it's disabled on any deployment where this is unset |
+| `YSR_WEB_DIR` | Directory the setup/login web UI's static files are served from at `/`. Unset (default) disables the web UI entirely; falls back to serving `/api/*`, `/mcp`, and `/docs` only. `docker-compose.yml`'s `app` service sets this to `web` |
+| `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | Per-client-IP rate limit on `/auth/signup`, `/auth/login`, and `/setup` — the endpoints reachable without a bearer token, and therefore the only ones an unauthenticated caller can brute-force. Defaults: 10 requests per 60 seconds |
 | `RUST_LOG` | Log level (e.g. `info`) |
 
 ## Logging

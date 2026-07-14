@@ -34,6 +34,11 @@ services:
       # this API cross-origin. Self-hosted deployments that never run `hosted` can leave
       # this unset -- an empty value disables CORS entirely, same as before this existed.
       YSR_CORS_ORIGINS: http://localhost:8081
+      # Serves web/ (login + first-run setup wizard) from this same process at "/".
+      YSR_WEB_DIR: web
+      # Single-tenant cap for this community-edition deployment; also what gates the
+      # first-run setup wizard (GET/POST /setup) on -- see crates/yorishiro-server/src/rest/setup.rs.
+      YORISHIRO_MAX_TENANTS: "1"
     ports:
       - "8080:8080"
     depends_on:

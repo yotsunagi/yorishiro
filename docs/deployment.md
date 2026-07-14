@@ -27,7 +27,10 @@ $ docker run --rm -e DATABASE_URL=postgres://... yorishiro admin list-tenants
 ## Hosted deployment
 
 Everything above is all a self-hosted (community) deployment needs — set
-`YORISHIRO_MAX_TENANTS=1` (see [configuration.md](configuration.md)) and stop there. A
+`YORISHIRO_MAX_TENANTS=1` and `YSR_WEB_DIR=web` (see [configuration.md](configuration.md)) and
+stop there; the latter serves the same [`web/`](../web) SPA used below, but its setup wizard
+(see [setup.md](setup.md#first-run-setup-community-edition)) is enough to onboard a community
+deployment's one tenant without ever reaching the hosted-only dashboard views. A
 *hosted* deployment additionally runs a second process, `yorishiro-hosted-server`, built
 from the separate `Dockerfile.hosted` (kept out of the community image's dependency tree
 and attack surface on purpose). It serves:

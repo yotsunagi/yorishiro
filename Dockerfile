@@ -44,7 +44,11 @@ COPY --from=builder /usr/local/bin/yorishiro-server /usr/local/bin/yorishiro-ser
 # resolve against this directory, so a model directory can be bind-mounted here without
 # also needing an absolute-path override.
 WORKDIR /app
-RUN chown yorishiro:yorishiro /app
+
+# The setup/login/member-management SPA, served by yorishiro-server itself via YSR_WEB_DIR
+# (unset by default -- set to "web", relative to this WORKDIR, to enable it).
+COPY web ./web
+RUN chown -R yorishiro:yorishiro /app
 
 USER yorishiro
 EXPOSE 8080

@@ -78,7 +78,8 @@ async fn main() -> Result<()> {
     let embedding_provider = build_embedding_provider()?;
     let state = AppState::new(tenant_db, identity_pool, embedding_provider);
     let embedding_tasks = state.embedding_tasks().clone();
-    let app = build_app(state);
+    let web_dir = std::env::var("YSR_WEB_DIR").ok();
+    let app = build_app(state, web_dir);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("listening on {bind_addr}");
@@ -185,8 +186,12 @@ fn build_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
 
 /// The routing configuration itself needs to be identical between `main` and the
 /// integration tests, so it's factored into a function that builds the app from just an
-/// `AppState`.
-fn build_app(state: AppState) -> Router {
+/// `AppState`. `web_dir`, when set, serves a static SPA (see `web/`) as the fallback for any
+/// path not matched by an API route -- this is how the community edition's first-run setup
+/// wizard and the hosted dashboard's static assets share the same `web/` tree while each
+/// process opts in independently (`YSR_WEB_DIR` here vs. `YORISHIRO_HOSTED_WEB_DIR` in
+/// `yorishiro-hosted-server`).
+fn build_app(state: AppState, web_dir: Option<String>) -> Router {
     let cors = build_cors_layer();
     let mcp_service = StreamableHttpService::new(
         {
@@ -197,7 +202,7 @@ fn build_app(state: AppState) -> Router {
         Default::default(),
     );
 
-    Router::new()
+    let router = Router::new()
         .route("/up", get(health::up_check))
         .route("/health", get(health::health_check))
         .route("/whoami", get(whoami::whoami))
@@ -213,7 +218,12 @@ fn build_app(state: AppState) -> Router {
                 .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
                 .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
         )
-        .with_state(state)
+        .with_state(state);
+
+    match web_dir {
+        Some(dir) => router.fallback_service(tower_http::services::ServeDir::new(dir)),
+        None => router,
+    }
 }
 
 fn build_cors_layer() -> CorsLayer {
@@ -313,7 +323,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn whoami_requires_authentication(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = app
             .oneshot(
@@ -330,7 +340,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn whoami_rejects_an_unknown_key(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = app
             .oneshot(
@@ -363,7 +373,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let response = app
             .oneshot(
                 Request::builder()
@@ -479,7 +489,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn mcp_tool_call_without_authorization_header_is_a_protocol_error(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -546,7 +556,7 @@ mod tests {
     /// tool's checks can't slip in unnoticed in the future.
     #[sqlx::test(migrations = "../../migrations")]
     async fn every_registered_tool_requires_an_authorization_header(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -623,7 +633,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -672,7 +682,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -731,7 +741,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_openapi_json_is_served(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(&app, "GET", "/api-docs/openapi.json", None, None).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -763,7 +773,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_entities_endpoint_requires_authentication(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(&app, "GET", "/api/entities", None, None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -771,7 +781,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn rest_entities_endpoint_rejects_an_unknown_bearer_token(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(
             &app,
@@ -801,7 +811,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
 
         let response = rest_request(
             &app,
@@ -838,7 +848,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -947,7 +957,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(FixedEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1043,7 +1053,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth_a = format!("Bearer {}", schema_key_a.plaintext);
         let write_auth_a = format!("Bearer {}", write_key_a.plaintext);
         let read_auth_b = format!("Bearer {}", read_key_b.plaintext);
@@ -1179,7 +1189,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1295,7 +1305,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1434,7 +1444,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
 
         let response = rest_request(&app, "GET", "/api/templates", Some(&schema_auth), None).await;
@@ -1487,7 +1497,7 @@ mod tests {
             db,
             pool.clone(),
             Arc::new(UnreachableEmbeddingProvider),
-        ));
+        ), None);
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1585,7 +1595,7 @@ mod tests {
         .await
         .unwrap();
 
-        let app = build_app(test_state(pool.clone()));
+        let app = build_app(test_state(pool.clone()), None);
 
         let response = rest_request(
             &app,
@@ -1632,7 +1642,7 @@ mod tests {
         .await
         .unwrap();
 
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
         let signup_body = Some(serde_json::json!({
             "invite_token": token,
             "password": "hunter2-hunter2",
@@ -1661,7 +1671,7 @@ mod tests {
         .await
         .unwrap();
 
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(
             &app,
@@ -1714,7 +1724,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(
             &app,
@@ -1733,7 +1743,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn auth_endpoints_are_rate_limited_per_caller(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         // The test driver never populates `ConnectInfo`, so every call here falls back to the
         // same shared bucket -- exercising the same "no requester info" path a request behind
@@ -1810,7 +1820,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = build_app(test_state(pool.clone()));
+        let app = build_app(test_state(pool.clone()), None);
 
         let response = rest_request(
             &app,
@@ -1869,7 +1879,7 @@ mod tests {
         )
         .await;
 
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(
             &app,
@@ -1906,7 +1916,7 @@ mod tests {
         )
         .await;
 
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(
             &app,
@@ -1921,7 +1931,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn members_endpoints_require_authentication(pool: PgPool) {
-        let app = build_app(test_state(pool));
+        let app = build_app(test_state(pool), None);
 
         let response = rest_request(&app, "GET", "/api/members", None, None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);

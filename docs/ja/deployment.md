@@ -25,8 +25,12 @@ $ docker run --rm -e DATABASE_URL=postgres://... yorishiro admin list-tenants
 
 ## ホスティング版のデプロイ
 
-セルフホスト（コミュニティ）版に必要なのは上記だけです — `YORISHIRO_MAX_TENANTS=1`を
-設定（[configuration.md](configuration.md)参照）すればそれで十分です。*ホスティング*版
+セルフホスト（コミュニティ）版に必要なのは上記だけです — `YORISHIRO_MAX_TENANTS=1`と
+`YSR_WEB_DIR=web`を設定（[configuration.md](configuration.md)参照）すればそれで十分です。
+後者は下記と同じ[`web/`](../web)のSPAを配信しますが、そのセットアップウィザード
+（[setup.md](setup.md#初回セットアップコミュニティ版)参照）だけでコミュニティ版の
+唯一のテナントをオンボードでき、ホスティング版限定のダッシュボード画面には到達しません。
+*ホスティング*版
 では追加で`yorishiro-hosted-server`という別プロセスを実行します。これは意図的に分離した
 別の`Dockerfile.hosted`からビルドされ（コミュニティ版イメージの依存関係ツリーや攻撃対象
 領域に含まれないようにするため）、以下を提供します:

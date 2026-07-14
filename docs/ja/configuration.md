@@ -14,8 +14,9 @@ docker composeの`environment:`や`docker compose exec -e`、systemdの`Environm
 | `DATABASE_URL` | PostgreSQL接続文字列（必須） |
 | `YSR_BIND` | リッスンアドレス（既定: `0.0.0.0:8080`） |
 | `YSR_CORS_ORIGINS` | ブラウザからアクセスする場合の許可オリジン（カンマ区切り。例: 別オリジンで動くダッシュボードが`/auth/login`/`/api/members`を呼べるようにする）。未設定時はクロスオリジン読み取り不可 |
-| `YORISHIRO_MAX_TENANTS` | `admin create-tenant`が作成できるテナント数のデプロイ全体での上限。未設定（既定）は無制限。セルフホスト（コミュニティ）版では`1`を設定し、ホスティング版では未設定のままにする。`POST /auth/signup`はテナントを作成しない（既存のテナントへ招待を引き換えるだけ）ため影響を受けない |
-| `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | `/auth/signup`と`/auth/login`（bearerトークン不要な唯一の2エンドポイントであり、未認証の呼び出し元が総当たりできる唯一の経路）に対する、呼び出し元IPごとのレート制限。既定値: 60秒あたり10リクエスト |
+| `YORISHIRO_MAX_TENANTS` | `admin create-tenant`が作成できるテナント数のデプロイ全体での上限。未設定（既定）は無制限。セルフホスト（コミュニティ）版では`1`を設定し、ホスティング版では未設定のままにする。`POST /auth/signup`はテナントを作成しない（既存のテナントへ招待を引き換えるだけ）ため影響を受けない。初回セットアップウィザード（`GET`/`POST /setup`、[setup.md](setup.md#初回セットアップコミュニティ版)参照）もこの変数で有効/無効が決まり、未設定のデプロイでは無効化される |
+| `YSR_WEB_DIR` | セットアップ・ログイン用Web UIの静的ファイルを`/`で配信するディレクトリ。未設定（既定）ではWeb UI自体が無効になり、`/api/*`・`/mcp`・`/docs`のみが配信される。`docker-compose.yml`の`app`サービスはこれを`web`に設定済み |
+| `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | `/auth/signup`・`/auth/login`・`/setup`（bearerトークン不要なエンドポイントであり、未認証の呼び出し元が総当たりできる唯一の経路）に対する、呼び出し元IPごとのレート制限。既定値: 60秒あたり10リクエスト |
 | `RUST_LOG` | ログレベル（例: `info`） |
 
 ## ログ出力
