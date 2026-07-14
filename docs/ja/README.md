@@ -60,23 +60,47 @@ flowchart TD
 
 ## クイックスタート
 
-必要なもの: Docker / Docker Compose / make。`make init`でイメージをビルドし、PostgreSQLと
-`app`（リポジトリルートのマルチステージ`Dockerfile`が生成する、本番と同じreleaseバイナリを
-実行するコンテナ）を起動します。
-
-埋め込みプロバイダの設定が起動に必須です。`docker-compose.yml`は既に`app`をローカルONNX
-プロバイダに向けているので、あとはモデルを配置するだけです（外部サービス不要）:
+埋め込みプロバイダの設定が起動に必須です。以下の例では外部サービス不要のローカルONNX
+プロバイダを使うので、まず768次元のBERT系ONNXモデルを配置します
+（[docs/ja/embedding-providers.md](embedding-providers.md)参照）:
 
 ```console
-$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
-
-# 768次元のBERT系ONNXモデルを配置（docs/ja/embedding-providers.md参照）
 $ mkdir -p models
 $ curl -L -o models/model.onnx \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/onnx/model_quantized.onnx
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
+```
 
+### ビルド済みDockerイメージ
+
+各タグのリリースで`ghcr.io/yotsunagi/yorishiro:vX.Y.Z`（および`:latest`）が公開されます。
+セットアップウィザードのSPA（`web/`）は既に同梱済みなので、埋め込みモデルをマウント
+するだけです。`-d --restart unless-stopped`でバックグラウンド起動し、再起動/クラッシュ後も
+自動的に立ち上がり直します:
+
+```console
+$ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
+    -v "$(pwd)/models:/app/models:ro" \
+    -e DATABASE_URL=postgres://... \
+    -e YSR_EMBEDDING_PROVIDER=local \
+    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
+    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
+    ghcr.io/yotsunagi/yorishiro:latest
+```
+
+Dockerを使わずビルド済みのLinuxバイナリを直接動かす方法（systemdでのバックグラウンド
+起動を含む）は[docs/ja/deployment.md](deployment.md)を参照してください。
+
+### ソースからビルド（Docker Compose）
+
+必要なもの: Docker / Docker Compose / make。`make init`でイメージをビルドし
+（上記のリリースイメージと同じマルチステージ`Dockerfile`を使用）、PostgreSQLと`app`を
+起動します。
+
+```console
+$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
+# （上記と同様にmodels/model.onnx、models/tokenizer.jsonを配置）
 $ make init
 ```
 

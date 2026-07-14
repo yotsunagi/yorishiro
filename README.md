@@ -63,24 +63,47 @@ flowchart TD
 
 ## Quick start
 
-Prerequisites: Docker / Docker Compose / make. `make init` builds the images and starts
-PostgreSQL plus `app`, a container running the actual release binary from the multi-stage
-`Dockerfile` at the repo root (the same image used in production).
-
-An embedding provider must be configured for the server to start. `docker-compose.yml`
-already points `app` at the local ONNX provider; here's how to fetch a model for it (needs
-no external service):
+An embedding provider must be configured for the server to start. The examples below use
+the local ONNX provider, which needs no external service — fetch a 768-dimensional
+BERT-family model first (see [docs/embedding-providers.md](docs/embedding-providers.md)):
 
 ```console
-$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
-
-# Place a 768-dimensional BERT-family ONNX model (see docs/embedding-providers.md)
 $ mkdir -p models
 $ curl -L -o models/model.onnx \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/onnx/model_quantized.onnx
 $ curl -L -o models/tokenizer.json \
     https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
+```
 
+### Prebuilt Docker image
+
+Every tag's release publishes `ghcr.io/yotsunagi/yorishiro:vX.Y.Z` (and `:latest`), which
+already bundles the setup-wizard SPA (`web/`) — only the embedding model needs mounting in.
+`-d --restart unless-stopped` runs it detached and brings it back up on reboot/crash:
+
+```console
+$ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
+    -v "$(pwd)/models:/app/models:ro" \
+    -e DATABASE_URL=postgres://... \
+    -e YSR_EMBEDDING_PROVIDER=local \
+    -e YSR_ONNX_MODEL_PATH=models/model.onnx -e YSR_ONNX_TOKENIZER_PATH=models/tokenizer.json \
+    -e YSR_WEB_DIR=web -e YORISHIRO_MAX_TENANTS=1 \
+    ghcr.io/yotsunagi/yorishiro:latest
+```
+
+See [docs/deployment.md](docs/deployment.md) for running the prebuilt Linux binary from
+[GitHub Releases](https://github.com/yotsunagi/yorishiro/releases) without Docker, including
+how to run it in the background via systemd.
+
+### From source (Docker Compose)
+
+Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same
+multi-stage `Dockerfile` the release image above is built from) and starts PostgreSQL plus
+`app`.
+
+```console
+$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
+# (place models/model.onnx and models/tokenizer.json as above)
 $ make init
 ```
 

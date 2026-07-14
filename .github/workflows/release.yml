@@ -18,9 +18,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            arch: amd64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            arch: arm64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -39,12 +39,12 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf "dist/yorishiro-server-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
+          tar -czf "dist/yorishiro-server-${{ github.ref_name }}-linux-${{ matrix.arch }}.tar.gz" \
             -C target/release yorishiro-server
 
       - uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.target }}
+          name: binary-linux-${{ matrix.arch }}
           path: dist/*.tar.gz
 
   docker:
