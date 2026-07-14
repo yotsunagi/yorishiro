@@ -369,11 +369,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let response = app
             .oneshot(
                 Request::builder()
@@ -629,11 +628,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -678,11 +676,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let session_id = mcp_handshake(&app).await;
 
         let response = mcp_post(
@@ -807,11 +804,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
 
         let response = rest_request(
             &app,
@@ -844,11 +840,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -953,11 +948,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(FixedEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(FixedEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1049,11 +1043,10 @@ mod tests {
             .unwrap();
         drop(conn_b);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth_a = format!("Bearer {}", schema_key_a.plaintext);
         let write_auth_a = format!("Bearer {}", write_key_a.plaintext);
         let read_auth_b = format!("Bearer {}", read_key_b.plaintext);
@@ -1185,11 +1178,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1301,11 +1293,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 
@@ -1440,11 +1431,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
 
         let response = rest_request(&app, "GET", "/api/templates", Some(&schema_auth), None).await;
@@ -1493,11 +1483,10 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let app = build_app(AppState::new(
-            db,
-            pool.clone(),
-            Arc::new(UnreachableEmbeddingProvider),
-        ), None);
+        let app = build_app(
+            AppState::new(db, pool.clone(), Arc::new(UnreachableEmbeddingProvider)),
+            None,
+        );
         let schema_auth = format!("Bearer {}", schema_key.plaintext);
         let write_auth = format!("Bearer {}", write_key.plaintext);
 

@@ -113,7 +113,13 @@ pub async fn setup(
         body.display_name.as_deref(),
     )
     .await?;
-    tenancy::add_member(&state.identity_pool, tenant.id, user.id, MembershipRole::Owner).await?;
+    tenancy::add_member(
+        &state.identity_pool,
+        tenant.id,
+        user.id,
+        MembershipRole::Owner,
+    )
+    .await?;
 
     let mut conn = state
         .identity_pool
@@ -164,7 +170,10 @@ mod tests {
             }
             None => Body::empty(),
         };
-        app.clone().oneshot(builder.body(body).unwrap()).await.unwrap()
+        app.clone()
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap()
     }
 
     use axum::Router;
@@ -207,6 +216,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
     async fn status_reports_setup_not_required_when_wizard_disabled(pool: PgPool) {
         let _guard = ENV_LOCK.lock().unwrap();
         set_max_tenants(None);
@@ -221,6 +231,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
     async fn setup_rejects_when_wizard_disabled(pool: PgPool) {
         let _guard = ENV_LOCK.lock().unwrap();
         set_max_tenants(None);
@@ -236,6 +247,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
     async fn setup_creates_tenant_workspace_and_owner(pool: PgPool) {
         let _guard = ENV_LOCK.lock().unwrap();
         set_max_tenants(Some("1"));
@@ -279,10 +291,13 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
     async fn setup_rejects_once_a_tenant_already_exists(pool: PgPool) {
         let _guard = ENV_LOCK.lock().unwrap();
         set_max_tenants(Some("1"));
-        tenancy::create_tenant(&pool, "existing", None).await.unwrap();
+        tenancy::create_tenant(&pool, "existing", None)
+            .await
+            .unwrap();
         let app = app(pool);
         let response = request(
             &app,
