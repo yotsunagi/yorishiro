@@ -114,4 +114,6 @@ $ make shell   # cargo/psql/sqlx-cliへの単発アクセス
 
 ## ライセンス
 
-[MITライセンス](../../LICENSE)。
+[Business Source License 1.1](../../LICENSE)。自己ホスティング（商用・社内利用を含む）は自由に行えます。制限されるのは
+Yorishiro自体を競合するホスティング／マネージドサービスとして提供することのみです。2030-07-14に自動的に
+GNU General Public License, Version 2.0以降へ移行します。
