@@ -94,16 +94,27 @@ async fn run(cli: Cli) -> Result<()> {
     // After closing HTTP, wait for the embedding sync of already-written entities to finish.
     // Exiting immediately without waiting would leave recently created entities permanently
     // missing from search (recoverable via `admin resync-embeddings`, but the goal is to
-    // avoid needing that on routine deploys).
+    // avoid needing that on routine deploys). A second Ctrl-C/SIGTERM during this wait forces
+    // an immediate exit instead -- without it, an operator who interrupts again out of
+    // impatience would see no response at all until the 30s timeout, since the first signal's
+    // `tokio::signal::ctrl_c()` in `shutdown_signal` has already resolved and nothing else is
+    // listening for a repeat.
     embedding_tasks.close();
-    if tokio::time::timeout(std::time::Duration::from_secs(30), embedding_tasks.wait())
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            "embedding syncs did not finish within 30s; exiting anyway \
-             (recover with `admin resync-embeddings`)"
-        );
+    tokio::select! {
+        result = tokio::time::timeout(std::time::Duration::from_secs(30), embedding_tasks.wait()) => {
+            if result.is_err() {
+                tracing::warn!(
+                    "embedding syncs did not finish within 30s; exiting anyway \
+                     (recover with `admin resync-embeddings`)"
+                );
+            }
+        }
+        _ = shutdown_signal() => {
+            tracing::warn!(
+                "second interrupt received; exiting immediately without waiting for embedding \
+                 syncs to finish (recover with `admin resync-embeddings`)"
+            );
+        }
     }
 
     Ok(())
