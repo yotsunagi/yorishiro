@@ -1,4 +1,4 @@
-.PHONY: build init up down restart logs shell test fmt fmt-check clippy admin clean
+.PHONY: build init up up-hosted down restart logs shell test fmt fmt-check clippy admin clean
 
 # Build the app (production) and dev (toolchain) images.
 build:
@@ -11,6 +11,11 @@ init: build up
 # Start db + app in the background.
 up:
 	docker compose up -d db app
+
+# Start db + app + the hosted admin dashboard/webhook service (opt-in profile -- self-hosted
+# deployments should keep using `make up`).
+up-hosted:
+	docker compose --profile hosted up -d db app hosted
 
 down:
 	docker compose down
