@@ -2,7 +2,7 @@
 
 [English](../schema.md) | **日本語**
 
-エンティティの型はJSONメタスキーマで定義します（例: `templates/task-management.json`）:
+エンティティの型はJSONメタスキーマで定義します(例: `templates/task-management.json`):
 
 ```json
 {

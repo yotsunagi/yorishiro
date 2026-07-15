@@ -28,41 +28,40 @@ $ curl "localhost:8080/api/entities/$ENTITY_ID/context" -H "Authorization: Beare
 $ curl "localhost:8080/api/export.jsonl" -H "Authorization: Bearer $YSR_KEY"
 ```
 
-`GET /api/entities` also accepts a `filter` query parameter (a JSON object matched with
-JSONB containment, e.g. `filter={"status":"active"}`), and `POST /api/schemas` accepts
-either an inline definition or `{"template_id": "..."}` to register one of the built-in
-templates listed at `GET /api/templates`.
+`GET /api/entities` also accepts a `filter` query parameter (a JSON object matched with JSONB containment, e.g. `filter={"status":"active"}`), and `POST /api/schemas` accepts either an inline definition or `{"template_id": "..."}` to register one of the built-in templates listed at `GET /api/templates`.
 
 ### Auth & member management
 
-Unlike every other endpoint, `/auth/signup` and `/auth/login` take no bearer token — their
-entire purpose is to hand one out. See
-[setup.md](setup.md#signup-login-and-member-management) for the full invite → signup →
-login flow.
+Unlike every other endpoint, `/auth/signup` and `/auth/login` take no bearer token — their entire purpose is to hand one out. See [setup.md](setup.md#signup-login-member-and-workspace-management) for the full invite → signup → login flow.
 
 ```console
 # Redeem an invite (see `admin create-invite`) to create an account
 $ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
     -d '{"invite_token":"...","password":"...","display_name":"..."}'
 
-# Exchange email/password for a freshly issued, role-capped API key
+# Exchange email/password for a freshly issued, role-capped API key. workspace_id is only
+# required if the account has access to more than one workspace (a 422 asks for it then).
 $ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
-    -d '{"email":"...","password":"...","workspace_id":"..."}'
+    -d '{"email":"...","password":"..."}'
 
 # List / add members of the caller's own tenant (owner/admin only)
 $ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
 $ curl -X POST localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY" \
     -H "Content-Type: application/json" -d '{"email":"...","role":"member"}'
+
+# List / create workspaces in the caller's own tenant (listing: any member; creating: owner/admin only)
+$ curl localhost:8080/api/workspaces -H "Authorization: Bearer $YSR_KEY"
+$ curl -X POST localhost:8080/api/workspaces -H "Authorization: Bearer $YSR_KEY" \
+    -H "Content-Type: application/json" -d '{"name":"staging"}'
 ```
 
-`POST /api/members` attaches an *existing* account to the caller's tenant — it never creates
-one (that's what signup does). Both member-management endpoints are gated on the caller's
-tenant role (owner/admin), independent of their key's own scope.
+`POST /api/members` attaches an *existing* account to the caller's tenant. It never creates one -- that's what signup does. Both member-management endpoints are gated on the caller's tenant role (owner/admin), independent of their key's own scope.
+
+Workspace management follows the same rule for `POST`/`DELETE`. Listing and fetching a single workspace's detail, at `GET /api/workspaces/{id}`, are open to any tenant member.
 
 ## MCP Tools
 
-Connecting to `/mcp` (Streamable HTTP) gives you access to 17 tools. Example connection
-from Claude Code:
+Connecting to `/mcp` (Streamable HTTP) gives you access to 17 tools. Example connection from Claude Code:
 
 ```console
 $ claude mcp add --transport http yorishiro http://localhost:8080/mcp \
@@ -83,5 +82,4 @@ $ claude mcp add --transport http yorishiro http://localhost:8080/mcp \
 | `search_entities` | read | Vector similarity search over a natural-language query, optionally narrowed by `entity_type`/`filter`; entities without an embedding can still surface via trigram fuzzy matching |
 | `recall_context` | read | Fetch an entity plus its relations and connected neighbors in one call |
 
-The REST-only `GET /api/export.jsonl` endpoint (full-workspace JSON Lines export) has no MCP
-tool equivalent.
+The REST-only `GET /api/export.jsonl` endpoint (full-workspace JSON Lines export) has no MCP tool equivalent.

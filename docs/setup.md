@@ -2,48 +2,107 @@
 
 **English** | [日本語](ja/setup.md)
 
-## Prerequisites and startup
+## Prerequisites
 
-The server needs an embedding model to start; it defaults to the local ONNX provider, which
-needs no external service or configuration beyond the model files themselves — fetch a
-768-dimensional BERT-family model first (see [embedding-providers.md](embedding-providers.md);
-to use an OpenAI-compatible endpoint instead, see that same doc):
+The server needs an embedding model to start. It defaults to the local ONNX provider, which needs no external service beyond the model files themselves.
 
-```console
-$ mkdir -p models
-$ curl -L -o models/model.onnx \
-    https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/onnx/model_quantized.onnx
-$ curl -L -o models/tokenizer.json \
-    https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
-```
+1. Fetch a 768-dimensional BERT-family model:
 
-The quickest way to start the server is the prebuilt Docker image
-(`ghcr.io/yotsunagi/yorishiro:latest`, published on every release):
+   ```console
+   $ mkdir -p models
+   $ curl -L -o models/model.onnx \
+       https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/onnx/model_quantized.onnx
+   $ curl -L -o models/tokenizer.json \
+       https://huggingface.co/Xenova/all-mpnet-base-v2/resolve/main/tokenizer.json
+   ```
 
-```console
-$ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
-    -v "$(pwd)/models:/app/models:ro" \
-    -e DATABASE_URL=postgres://... \
-    ghcr.io/yotsunagi/yorishiro:latest
-```
+To use an OpenAI-compatible endpoint instead, see [embedding-providers.md](embedding-providers.md).
 
-This is a complete, working single-tenant deployment as-is: the web UI (compiled into the binary -- no separate `web/` directory to fetch or mount), `YORISHIRO_MAX_TENANTS` (caps this deployment at one tenant), and `YSR_EMBEDDING_PROVIDER` (uses the local ONNX model at `models/model.onnx`/`models/tokenizer.json`, matching the volume mounted above) all already default to that. See [configuration.md](configuration.md) to change any of them, or [deployment.md](deployment.md) for running the prebuilt Linux binary without Docker (including background/systemd operation), or for building from source. For local development, Prerequisites: Docker / Docker Compose / make. `make init` builds the images (from the same multi-stage `Dockerfile` the release image is built from) and starts PostgreSQL plus `app`; `docker-compose.yml` already points `app` at the local ONNX provider configured above:
+Pick one of the three ways to run the server below.
 
-Every `-e`/environment variable above can go in a `config.yml` file instead (mount it at `/app/config.yml` for the Docker image above), which is often more convenient than a long list of `-e` flags for a deployment's baseline configuration — see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml).
+## Run with Docker
 
-```console
-$ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
-# (place models/model.onnx and models/tokenizer.json as above)
-$ make init
-```
+The quickest way to start. Needs Docker and a reachable PostgreSQL instance.
 
-Migrations are applied automatically on startup. Endpoints:
+1. Complete [Prerequisites](#prerequisites) above.
+2. Start the container, pointing it at your database and the model directory:
+
+   ```console
+   $ docker run -d --name yorishiro --restart unless-stopped -p 8080:8080 \
+       -v "$(pwd)/models:/app/models:ro" \
+       -e DATABASE_URL=postgres://... \
+       ghcr.io/yotsunagi/yorishiro:latest
+   ```
+
+3. Confirm it's up:
+
+   ```console
+   $ curl localhost:8080/up
+   ```
+
+This is a complete, working single-tenant deployment as-is. The web UI is compiled into the binary, so there's no separate `web/` directory to fetch or mount. `YORISHIRO_MAX_TENANTS`/`YSR_EMBEDDING_PROVIDER` already default to single-tenant/local-ONNX, matching the volume mounted above.
+
+See [configuration.md](configuration.md) to change any of that. See [deployment.md](deployment.md#running-in-the-background) for running it in the background, building the image from source, or running the admin CLI from the same image.
+
+## Run the prebuilt binary
+
+For a bare-metal or VM deployment without Docker.
+
+1. Complete [Prerequisites](#prerequisites) above.
+2. Download and extract the release archive for your architecture:
+
+   ```console
+   $ mkdir -p /opt/yorishiro && cd /opt/yorishiro
+   $ curl -L -o yorishiro.tar.gz \
+       https://github.com/yotsunagi/yorishiro/releases/download/vX.Y.Z/yorishiro-server-vX.Y.Z-linux-amd64.tar.gz
+   $ tar -xzf yorishiro.tar.gz && rm yorishiro.tar.gz
+   ```
+
+   The archive contains only the `yorishiro-server` binary. The web UI is compiled in, so nothing else needs fetching for it. Move (or symlink) the `models/` directory from step 1 next to the binary.
+3. Set at least `DATABASE_URL`. Either write a `config.yml` file next to the binary (it's read directly -- see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml)), or load it into the shell that starts it:
+
+   ```console
+   $ curl -L -o .env https://raw.githubusercontent.com/yotsunagi/yorishiro/vX.Y.Z/.env.example
+   # (edit .env to set DATABASE_URL; everything else can stay commented out)
+   $ set -a; source .env; set +a
+   ```
+
+4. Run it:
+
+   ```console
+   $ ./yorishiro-server
+   ```
+
+See [deployment.md](deployment.md#running-in-the-background) to keep it running across reboots with systemd.
+
+## Run from source (Docker Compose)
+
+For local development. Needs Docker, Docker Compose, and `make`.
+
+1. Clone the repository and complete [Prerequisites](#prerequisites) above inside it:
+
+   ```console
+   $ git clone https://github.com/yotsunagi/yorishiro && cd yorishiro
+   # (place models/model.onnx and models/tokenizer.json as above)
+   ```
+
+2. Build the images (from the same multi-stage `Dockerfile` the release image is built from) and start PostgreSQL plus `app` (`docker-compose.yml` already points it at the local ONNX provider):
+
+   ```console
+   $ make init
+   ```
+
+Every `-e`/environment variable used by any of the three methods above can go in a `config.yml` file instead. Mount it at `/app/config.yml` for Docker. This is often more convenient than a long list of `-e` flags -- see [configuration.md](configuration.md#configyml) and [`config.example.yml`](../config.example.yml).
+
+## Endpoints
+
+Migrations are applied automatically on startup, for all three methods above.
 
 | Path | Description |
 |---|---|
 | `http://localhost:8080/up` | Liveness probe (always 200 if the process is running; no dependency checks) |
 | `http://localhost:8080/health` | Readiness check (also probes DB connectivity; 503 on outage) |
-| `http://localhost:8080/` | Setup/login web UI (compiled into the binary; see `YSR_WEB_DIR` in [configuration.md](configuration.md) to serve it from disk instead) |
+| `http://localhost:8080/` | Setup/login/workspace-management web UI (compiled into the binary; see `YSR_WEB_DIR` in [configuration.md](configuration.md) to serve it from disk instead) |
 | `http://localhost:8080/docs` | Swagger UI (REST API documentation) |
 | `http://localhost:8080/api-docs/openapi.json` | OpenAPI specification |
 | `http://localhost:8080/mcp` | MCP endpoint (Streamable HTTP) |
@@ -51,7 +110,9 @@ Migrations are applied automatically on startup. Endpoints:
 
 ## First-run setup
 
-Deployments where `YORISHIRO_MAX_TENANTS` resolves to an actual cap (the default: unset means `1`) serve a setup wizard at `http://localhost:8080/` — no admin CLI needed. On first visit, since no tenant exists yet, the browser shows a form asking only for an email and password; submitting it creates the tenant, its `default` workspace, and an owner account in one step, and displays the freshly issued API key (shown only once, same as every other key in this system). Visiting the same page afterward shows a login form instead.
+Deployments where `YORISHIRO_MAX_TENANTS` resolves to an actual cap (the default: unset means `1`) serve a setup wizard at `http://localhost:8080/`. No admin CLI needed.
+
+On first visit, since no tenant exists yet, the browser shows a form asking only for an email and password. Submitting it creates the tenant, its `default` workspace, and an owner account in one step, and displays the freshly issued API key (shown only once, same as every other key in this system). Visiting the same page afterward shows a login form instead.
 
 The same flow is available without a browser:
 
@@ -64,36 +125,28 @@ $ curl -X POST localhost:8080/setup -H "Content-Type: application/json" \
  "api_key":"ysr_..."}
 ```
 
-`POST /setup` returns `404` once a tenant already exists, or on any deployment where `YORISHIRO_MAX_TENANTS` resolves to unlimited (i.e. explicitly set to `0`) — hosted deployments onboard tenants via signup/invite instead (see [Signup, login, and member management](#signup-login-and-member-management)). The admin CLI below remains available for anything the wizard doesn't cover: additional workspaces/tenants, invites, and key rotation.
+`POST /setup` returns `404` once a tenant already exists, or on any deployment where `YORISHIRO_MAX_TENANTS` resolves to unlimited (i.e. explicitly set to `0`). Hosted deployments onboard tenants via signup/invite instead (see [Signup, login, member, and workspace management](#signup-login-member-and-workspace-management)).
+
+The admin CLI below remains available for anything the wizard doesn't cover: additional workspaces/tenants, invites, and key rotation.
 
 ## Tenants, workspaces, and users
 
 Yorishiro's control plane is two-tiered:
 
-- A **tenant** is an organization/account. It can have `max_workspaces` set (a billing cap;
-  `NULL`, the default, means unlimited — appropriate for self-hosted deployments) and can
-  have any number of human **users** attached to it, each with a role (`owner` / `admin` /
-  `member` / `viewer`) recorded in a membership. A user can belong to multiple tenants.
-- A **workspace** belongs to exactly one tenant and is the actual operational container:
-  schemas, entities, relations, and API keys all scope to a workspace, not directly to the
-  tenant. A workspace can have `max_entities` set (also `NULL`/unlimited by default).
+- A **tenant** is an organization/account. It can have `max_workspaces` set (a billing cap; `NULL`, the default, means unlimited, which is appropriate for self-hosted deployments). It can have any number of human **users** attached to it, each with a role (`owner` / `admin` / `member` / `viewer`) recorded in a membership. A user can belong to multiple tenants.
+- A **workspace** belongs to exactly one tenant and is the actual operational container. Schemas, entities, relations, and API keys all scope to a workspace, not directly to the tenant. A workspace can have `max_entities` set (also `NULL`/unlimited by default).
 
-Splitting tenant from workspace lets one organization run several isolated projects (e.g.
-separate workspaces per environment or team) without provisioning a whole new tenant for
-each, and lets several people share administrative access to the same tenant via
-memberships. Tenant/workspace *creation* is only available through the admin CLI below (by
-whoever holds `DATABASE_URL`); day-to-day *membership* management (inviting/adding/listing
-members) is available to tenant owners/admins over REST — see
-[Signup, login, and member management](#signup-login-and-member-management).
+Splitting tenant from workspace lets one organization run several isolated projects (e.g. separate workspaces per environment or team) without provisioning a whole new tenant for each. It also lets several people share administrative access to the same tenant via memberships.
+
+Tenant/workspace *creation* is only available through the admin CLI below, by whoever holds `DATABASE_URL`. Day-to-day *membership* management (inviting/adding/listing members) is available to tenant owners/admins over REST -- see [Signup, login, member, and workspace management](#signup-login-member-and-workspace-management).
 
 By default (unset `YORISHIRO_MAX_TENANTS`), a deployment is capped at a single tenant, so `admin create-tenant` and the signup flow below can never create a second one. Set `YORISHIRO_MAX_TENANTS=0` (see [configuration.md](configuration.md)) to allow unlimited tenants, or to a specific number to allow that many.
 
 ## Provisioning tenants, workspaces, and API keys
 
-Deployments that used the setup wizard above can skip this section for their first (and, under the default `YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to provision *additional* tenants/workspaces, and the only way to provision anything at all on deployments where `YORISHIRO_MAX_TENANTS` resolves to unlimited (the wizard is disabled there).
+Deployments that used the setup wizard above can skip this section for their first (and, under the default `YORISHIRO_MAX_TENANTS=1`, only) tenant. It remains the only way to provision *additional* tenants/workspaces. On deployments where `YORISHIRO_MAX_TENANTS` resolves to unlimited, the wizard is disabled, so this is the only way to provision anything at all.
 
-API keys are stored in the database only as SHA-256 hashes and user passwords only as
-argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:
+API keys are stored in the database only as SHA-256 hashes and user passwords only as argon2 hashes, so neither can be provisioned by hand in SQL — both go through the admin CLI:
 
 ```console
 $ make admin ARGS="create-tenant my-team"
@@ -113,13 +166,9 @@ api key created (the plaintext key is shown ONLY once — store it now)
 $ make admin ARGS="list-tenants"
 ```
 
-`create-tenant` also creates a `default` workspace under the new tenant, since most
-deployments only need one workspace per tenant; use `create-workspace` for additional ones.
-The plaintext API key is shown only once, at issuance time. Admin commands access the
-database directly using the connection role from `DATABASE_URL` (the same administrative
-role used for migrations, and the only role permitted to touch
-`identity.tenants`/`identity.users`/`identity.tenant_memberships` at all — the application's
-own `yorishiro_app` role cannot).
+`create-tenant` also creates a `default` workspace under the new tenant, since most deployments only need one workspace per tenant. Use `create-workspace` for additional ones. The plaintext API key is shown only once, at issuance time.
+
+Admin commands access the database directly using the connection role from `DATABASE_URL`. This is the same administrative role used for migrations, and the only role permitted to touch `identity.tenants`/`identity.users`/`identity.tenant_memberships` at all -- the application's own `yorishiro_app` role cannot.
 
 Other admin commands:
 
@@ -139,40 +188,31 @@ Other admin commands:
 
 ## Authentication and scopes
 
-All APIs authenticate via `Authorization: Bearer <api-key>`. Keys are strings starting with
-`ysr_`, shown only once at issuance time (only a SHA-256 hash is stored in the database).
+All APIs authenticate via `Authorization: Bearer <api-key>`. Keys are strings starting with `ysr_`, shown only once at issuance time (only a SHA-256 hash is stored in the database).
 
-Scopes form a three-level hierarchy: `read` < `write` < `schema`. A `write` key can also
-read, and a `schema` key can perform every operation, including schema registration.
+Scopes form a three-level hierarchy: `read` < `write` < `schema`. A `write` key can also read, and a `schema` key can perform every operation, including schema registration.
 
 ### Attributing keys to users
 
-Every request, human or automated, is ultimately authenticated by an API key (there's no
-cookie/session state on the server) — but a key can be *attributed* to a human user, and
-multi-user access control works by tying that attribution to the user's tenant role rather
-than by a session. Passing `--user <user-id>` to `create-api-key` attributes the key to that
-member and caps the requested scope at `MembershipRole::max_scope()`: `owner`/`admin` may be
-issued up to `schema`, `member` up to `write`, and `viewer` up to `read`. Requesting a scope
-above that cap, or attributing a key to someone who isn't a member of the workspace's
-tenant, is rejected at issuance time. This check runs once, when the key is created — like a
-key's scope itself, it isn't re-evaluated on every request, so revoking a user's membership
-doesn't retroactively narrow keys already issued to them (revoke the key instead). Omit
-`--user` for unattributed service/automation keys, which aren't capped by any role.
-`GET /whoami` echoes the attributed `user_id` (or `null`) alongside the workspace, tenant,
-and scope.
+Every request, human or automated, is ultimately authenticated by an API key -- there's no cookie/session state on the server. But a key can be *attributed* to a human user, and multi-user access control works by tying that attribution to the user's tenant role rather than by a session.
 
-`POST /auth/login` (below) is the self-service equivalent of `admin create-api-key --user`:
-it authenticates with a password instead of `DATABASE_URL` access, and issues a key already
-capped at the caller's own role.
+Passing `--user <user-id>` to `create-api-key` attributes the key to that member and caps the requested scope at `MembershipRole::max_scope()`: `owner`/`admin` may be issued up to `schema`, `member` up to `write`, and `viewer` up to `read`.
 
-## Signup, login, and member management
+Requesting a scope above that cap, or attributing a key to someone who isn't a member of the workspace's tenant, is rejected at issuance time.
 
-Account creation is invite-only — there is no public, unauthenticated signup. A tenant
-owner/admin issues an invite (by CLI or, once they hold an API key, by REST), the invitee
-redeems it once to create their account, and from then on they authenticate with
-email/password to obtain API keys, rather than being handed one out of band.
+This check runs once, when the key is created. Like a key's scope itself, it isn't re-evaluated on every request, so revoking a user's membership doesn't retroactively narrow keys already issued to them -- revoke the key instead.
 
-1. **Invite** — a tenant owner/admin creates an invite token for an email address and role:
+Omit `--user` for unattributed service/automation keys, which aren't capped by any role. `GET /whoami` echoes the attributed `user_id` (or `null`) alongside the workspace, tenant, and scope.
+
+`POST /auth/login` (below) is the self-service equivalent of `admin create-api-key --user`: it authenticates with a password instead of `DATABASE_URL` access, and issues a key already capped at the caller's own role.
+
+## Signup, login, member, and workspace management
+
+Account creation is invite-only — there is no public, unauthenticated signup. A tenant owner/admin issues an invite (by CLI or, once they hold an API key, by REST), the invitee redeems it once to create their account, and from then on they authenticate with email/password to obtain API keys, rather than being handed one out of band.
+
+1. Invite
+
+   A tenant owner/admin creates an invite token for an email address and role:
 
    ```console
    $ make admin ARGS="create-invite 019f565d-f1e3-7afb-b876-b7003e43c230 newperson@example.com member"
@@ -182,11 +222,12 @@ email/password to obtain API keys, rather than being handed one out of band.
      expires at: 2026-07-20 16:57 UTC
    ```
 
-   Send the plaintext `token` to the invitee out of band (email, chat, etc.) — like an API
-   key, it's shown only once and only its hash is persisted. It expires after `--ttl-hours`
-   (default 7 days) or immediately upon being redeemed, whichever comes first.
+   - Send the plaintext `token` to the invitee out of band (email, chat, etc.). Like an API key, it's shown only once and only its hash is persisted.
+   - It expires after `--ttl-hours` (default 7 days) or immediately upon being redeemed, whichever comes first.
 
-2. **Signup** — the invitee redeems the token to create their account:
+2. Signup
+
+   The invitee redeems the token to create their account:
 
    ```console
    $ curl -X POST localhost:8080/auth/signup -H "Content-Type: application/json" \
@@ -195,23 +236,26 @@ email/password to obtain API keys, rather than being handed one out of band.
     "workspaces":[{"id":"...","name":"default"}]}
    ```
 
-   This both creates the `identity.users` row and adds the membership the invite specified
-   — a second signup attempt with the same (now-consumed) token is rejected (422).
+   This both creates the `identity.users` row and adds the membership the invite specified. A second signup attempt with the same (now-consumed) token is rejected (422).
 
-3. **Login** — from then on, the user exchanges their password for a freshly issued API key,
-   scoped to one workspace and capped at their role's `max_scope()` (see above):
+3. Login
+
+   From then on, the user exchanges their password for a freshly issued API key, scoped to one workspace and capped at their role's `max_scope()` (see above).
+
+   - `workspace_id` can be omitted: it's auto-resolved when the account has access to exactly one workspace, which is true for every community-edition deployment by default.
+   - It only needs to be passed explicitly when the account belongs to more than one, in which case a 422 asks for it:
 
    ```console
    $ curl -X POST localhost:8080/auth/login -H "Content-Type: application/json" \
-       -d '{"email":"newperson@example.com","password":"a strong password","workspace_id":"..."}'
+       -d '{"email":"newperson@example.com","password":"a strong password"}'
    {"api_key":"ysr_...","api_key_id":"...","workspace_id":"...","scope":"write","user_id":"..."}
    ```
 
-   Every login issues a *new* key rather than reusing one — revoke old ones with
-   `admin revoke-api-key` if they're no longer needed.
+   Every login issues a *new* key rather than reusing one. Revoke old ones with `admin revoke-api-key` if they're no longer needed.
 
-4. **Member management** — once authenticated, a tenant owner/admin can list and add members
-   over REST without needing `DATABASE_URL`/the admin CLI at all:
+4. Member management
+
+   Once authenticated, a tenant owner/admin can list and add members over REST without needing `DATABASE_URL`/the admin CLI at all:
 
    ```console
    $ curl localhost:8080/api/members -H "Authorization: Bearer $YSR_KEY"
@@ -220,8 +264,20 @@ email/password to obtain API keys, rather than being handed one out of band.
        -d '{"email":"existing-user@example.com","role":"admin"}'
    ```
 
-   `POST /api/members` attaches an *existing* account (one that already completed signup) to
-   the caller's tenant — it never creates a new account. To bring in someone with no account
-   yet, issue them an invite (step 1) instead. Both endpoints require the caller's own key to
-   be attributed to an Owner/Admin member — a Member-role key is rejected with 403 regardless
-   of its own scope, since membership management is a tenant-role concern, not a scope one.
+   - `POST /api/members` attaches an *existing* account (one that already completed signup) to the caller's tenant. It never creates a new account. To bring in someone with no account yet, issue them an invite (step 1) instead.
+   - Both endpoints require the caller's own key to be attributed to an Owner/Admin member. A Member-role key is rejected with 403 regardless of its own scope, since membership management is a tenant-role concern, not a scope one.
+
+5. Workspace management
+
+   Similarly, any authenticated member can list a tenant's workspaces (including their entity/relation/schema counts), while creating or deleting one is restricted to owners/admins, the same way member management is:
+
+   ```console
+   $ curl localhost:8080/api/workspaces -H "Authorization: Bearer $YSR_KEY"
+   $ curl -X POST localhost:8080/api/workspaces -H "Authorization: Bearer $YSR_KEY" \
+       -H "Content-Type: application/json" -d '{"name":"staging"}'
+   $ curl localhost:8080/api/workspaces/$WORKSPACE_ID -H "Authorization: Bearer $YSR_KEY"
+   $ curl -X DELETE localhost:8080/api/workspaces/$WORKSPACE_ID -H "Authorization: Bearer $YSR_KEY"
+   ```
+
+   - Deleting a workspace cascades to everything under it: entities, relations, schemas, API keys. It's rejected with 409 if it's the tenant's only remaining workspace, since there would be no way to provision a replacement without `DATABASE_URL` access.
+   - The web UI (`/`) exposes the same create/list/delete/detail operations after signing in.
