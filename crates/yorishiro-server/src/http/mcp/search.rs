@@ -9,8 +9,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth::ApiKeyScope;
-use yorishiro_core::search;
+use yorishiro_core::repositories::search;
+use yorishiro_core::services::auth::ApiKeyScope;
 
 use super::{ScopeOutcome, YorishiroMcpServer, authorize_scope_only, err_to_tool_result, ok_json};
 

@@ -12,7 +12,7 @@ use rmcp::{ServerHandler, tool_handler};
 use sqlx::PgConnection;
 use sqlx::pool::PoolConnection;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth::{self, ApiKeyScope, AuthContext};
+use yorishiro_core::services::auth::{self, ApiKeyScope, AuthContext};
 
 use crate::state::AppState;
 
@@ -84,7 +84,7 @@ fn extract_bearer_key(parts: &Parts) -> Result<&str, ErrorData> {
 /// The sole entry point for every tool handler. Because there is no other way to
 /// obtain a `&mut PgConnection`, forgetting the scope check is structurally
 /// impossible. The actual auth/authz logic is shared with the REST adapter via
-/// `yorishiro_core::auth::authorize`; this just routes its result into the MCP
+/// `yorishiro_core::services::auth::authorize`; this just routes its result into the MCP
 /// protocol's two failure shapes (`ErrorData` at the protocol level,
 /// `CallToolResult` at the tool-result level).
 pub(super) async fn authorize(

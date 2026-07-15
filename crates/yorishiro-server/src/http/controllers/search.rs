@@ -3,7 +3,7 @@ use axum::extract::{Query, State};
 use serde::Deserialize;
 use utoipa::IntoParams;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::search::{self, SearchHit};
+use yorishiro_core::repositories::search::{self, SearchHit};
 
 use crate::error::ApiError;
 use crate::http::middleware::auth::{ReadScope, Verified};

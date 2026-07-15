@@ -7,9 +7,9 @@ use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::db::TenantDb;
-use yorishiro_core::embedding::EmbeddingProvider;
-use yorishiro_core::embedding_sync;
-use yorishiro_core::entities::EntityRecord;
+use yorishiro_core::repositories::entities::EntityRecord;
+use yorishiro_core::services::embedding::EmbeddingProvider;
+use yorishiro_core::services::embedding_sync;
 
 /// Cap on concurrent background embedding syncs. Each sync task holds a pool connection for
 /// the duration of the embedding API call (up to tens of seconds), so spawning without limit

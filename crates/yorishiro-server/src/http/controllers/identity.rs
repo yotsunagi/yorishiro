@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth::{self, ApiKeyScope};
-use yorishiro_core::tenancy::{self, MembershipRole};
+use yorishiro_core::repositories::tenancy::{self, MembershipRole};
+use yorishiro_core::services::auth::{self, ApiKeyScope};
 
 use crate::error::ApiError;
 use crate::state::AppState;

@@ -8,8 +8,8 @@ use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
-use yorishiro_core::auth::ApiKeyScope;
-use yorishiro_core::recall::{self, DEFAULT_RECALL_LIMIT};
+use yorishiro_core::repositories::recall::{self, DEFAULT_RECALL_LIMIT};
+use yorishiro_core::services::auth::ApiKeyScope;
 
 use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
 

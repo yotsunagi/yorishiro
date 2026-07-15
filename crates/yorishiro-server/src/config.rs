@@ -162,7 +162,7 @@ mod tests {
     use std::sync::Mutex;
 
     // Env vars are process-wide state; serialize tests through this lock rather than racing
-    // each other (same pattern as `yorishiro_core::tenancy`'s env tests).
+    // each other (same pattern as `yorishiro_core::repositories::tenancy`'s env tests).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {

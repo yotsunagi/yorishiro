@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use yorishiro_core::embedding::{
+use yorishiro_core::services::embedding::{
     EmbeddingProvider, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
 };
-use yorishiro_core::embedding_onnx::{LocalOnnxConfig, LocalOnnxProvider};
+use yorishiro_core::services::embedding_onnx::{LocalOnnxConfig, LocalOnnxProvider};
 
 pub mod admin;
 mod error;
@@ -124,8 +124,8 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
     use yorishiro_core::YorishiroError;
-    use yorishiro_core::auth::{ApiKeyScope, create_api_key};
-    use yorishiro_core::tenancy;
+    use yorishiro_core::repositories::tenancy;
+    use yorishiro_core::services::auth::{ApiKeyScope, create_api_key};
 
     use super::*;
     use yorishiro_core::db::TenantDb;

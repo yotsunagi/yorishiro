@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth;
-use yorishiro_core::tenancy::{self, MembershipRole};
+use yorishiro_core::repositories::tenancy::{self, MembershipRole};
+use yorishiro_core::services::auth;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -189,7 +189,7 @@ mod tests {
 
     use axum::Router;
     use yorishiro_core::db::TenantDb;
-    use yorishiro_core::embedding::EmbeddingProvider;
+    use yorishiro_core::services::embedding::EmbeddingProvider;
 
     struct UnreachableEmbeddingProvider;
 

@@ -1,33 +1,14 @@
-use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::PgConnection;
-use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::entities::{self, EntityRecord};
 use crate::error::YorishiroError;
-use crate::relations::{self, DEFAULT_NEIGHBORS_LIMIT};
-use crate::schemas;
+use crate::models::entities::EntityRecord;
+use crate::repositories::entities;
+use crate::repositories::relations;
+use crate::repositories::schemas;
 
-pub const DEFAULT_RECALL_LIMIT: i64 = DEFAULT_NEIGHBORS_LIMIT;
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct RecallRelation {
-    pub relation_type: String,
-    pub direction: String,
-    /// The connected entity. Shallow (only `x-embed` fields in `data`) by default; pass
-    /// `full: true` to `recall_context` to get every field instead.
-    pub neighbor: EntityRecord,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct RecallContext {
-    /// The requested entity, always with its full `data`.
-    pub entity: EntityRecord,
-    pub relations: Vec<RecallRelation>,
-    /// `true` when more neighbors exist beyond `limit` than are included above.
-    pub truncated: bool,
-}
+pub use crate::models::recall::*;
 
 /// Reduces `entity.data` down to only the fields marked `x-embed` in its entity_type
 /// definition. Falls back to an empty body if the entity's schema version no longer defines
@@ -104,7 +85,7 @@ mod tests {
     use super::*;
     use crate::db::TenantDb;
     use crate::metaschema::MetaSchemaDefinition;
-    use crate::relations::CreateRelationInput;
+    use crate::repositories::relations::CreateRelationInput;
 
     fn project_task_schema() -> MetaSchemaDefinition {
         serde_json::from_value(json!({

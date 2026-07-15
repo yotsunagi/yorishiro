@@ -5,11 +5,11 @@ use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::embedding::EmbeddingProvider;
-use crate::entities::EntityRecord;
 use crate::error::YorishiroError;
 use crate::metaschema::EntityTypeDef;
-use crate::schemas;
+use crate::models::entities::EntityRecord;
+use crate::repositories::schemas;
+use crate::services::embedding::EmbeddingProvider;
 
 #[derive(Iden)]
 enum Entities {
@@ -148,9 +148,9 @@ mod tests {
 
     use super::*;
     use crate::db::TenantDb;
-    use crate::entities::{self, CreateEntityInput};
     use crate::metaschema::MetaSchemaDefinition;
-    use crate::schemas;
+    use crate::repositories::entities::{self, CreateEntityInput};
+    use crate::repositories::schemas;
 
     struct FakeProvider {
         dimensions: usize,

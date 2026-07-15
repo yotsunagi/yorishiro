@@ -2,15 +2,15 @@ use chrono::{DateTime, Utc};
 use sea_query::extension::postgres::{PgBinOper, PgExpr};
 use sea_query::{Alias, BinOper, Expr, Func, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
-use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgConnection;
-use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::embedding::EmbeddingProvider;
-use crate::entities::EntityRecord;
 use crate::error::YorishiroError;
+use crate::models::entities::EntityRecord;
+use crate::services::embedding::EmbeddingProvider;
+
+pub use crate::models::search::*;
 
 #[derive(Iden)]
 enum Entities {
@@ -26,34 +26,6 @@ enum Entities {
     UpdatedAt,
     CreatedBy,
     UpdatedBy,
-}
-
-const DEFAULT_SEARCH_LIMIT: i64 = 10;
-
-pub struct SearchQuery {
-    pub entity_type: Option<String>,
-    /// JSONB containment filter (`data @> filter`), e.g. `{"status": "active"}`.
-    pub filter: Option<Value>,
-    pub limit: i64,
-}
-
-impl Default for SearchQuery {
-    fn default() -> Self {
-        Self {
-            entity_type: None,
-            filter: None,
-            limit: DEFAULT_SEARCH_LIMIT,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct SearchHit {
-    pub entity: EntityRecord,
-    /// pgvector cosine distance (the `<=>` operator). Closer to 0 means more similar. `None`
-    /// when the entity has no embedding and was only surfaced through the pg_trgm fuzzy
-    /// text match on `query_text`.
-    pub distance: Option<f64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -197,10 +169,10 @@ mod tests {
 
     use super::*;
     use crate::db::TenantDb;
-    use crate::embedding_sync;
-    use crate::entities::{self, CreateEntityInput};
     use crate::metaschema::MetaSchemaDefinition;
-    use crate::schemas;
+    use crate::repositories::entities::{self, CreateEntityInput};
+    use crate::repositories::schemas;
+    use crate::services::embedding_sync;
 
     const DIM: usize = 768;
 

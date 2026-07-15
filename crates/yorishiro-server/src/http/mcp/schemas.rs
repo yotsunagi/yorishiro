@@ -10,9 +10,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth::ApiKeyScope;
 use yorishiro_core::metaschema::{self, MetaSchemaDefinition};
-use yorishiro_core::schemas;
+use yorishiro_core::repositories::schemas;
+use yorishiro_core::services::auth::ApiKeyScope;
 use yorishiro_core::templates;
 
 use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};

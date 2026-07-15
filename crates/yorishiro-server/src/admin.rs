@@ -4,8 +4,8 @@ use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use sqlx::PgPool;
 use uuid::Uuid;
-use yorishiro_core::auth::{self, ApiKeyScope, CreatedApiKey};
-use yorishiro_core::tenancy::{self, MembershipRole};
+use yorishiro_core::repositories::tenancy::{self, MembershipRole};
+use yorishiro_core::services::auth::{self, ApiKeyScope, CreatedApiKey};
 
 #[derive(Iden)]
 enum Workspaces {
@@ -433,7 +433,7 @@ struct ResyncReport {
 async fn resync_embeddings(
     pool: &PgPool,
     workspace_id: Uuid,
-    provider: &dyn yorishiro_core::embedding::EmbeddingProvider,
+    provider: &dyn yorishiro_core::services::embedding::EmbeddingProvider,
 ) -> Result<ResyncReport> {
     let (sql, values) = Query::select()
         .column(Entities::Id)
@@ -451,8 +451,10 @@ async fn resync_embeddings(
     let mut conn = pool.acquire().await?;
     for (entity_id,) in ids {
         let result = async {
-            let record = yorishiro_core::entities::get(&mut conn, workspace_id, entity_id).await?;
-            yorishiro_core::embedding_sync::sync_embedding_for_record(
+            let record =
+                yorishiro_core::repositories::entities::get(&mut conn, workspace_id, entity_id)
+                    .await?;
+            yorishiro_core::services::embedding_sync::sync_embedding_for_record(
                 &mut conn,
                 workspace_id,
                 &record,
@@ -585,7 +587,7 @@ mod tests {
     async fn resync_fills_missing_embeddings(pool: PgPool) {
         use async_trait::async_trait;
         use yorishiro_core::YorishiroError;
-        use yorishiro_core::embedding::EmbeddingProvider;
+        use yorishiro_core::services::embedding::EmbeddingProvider;
 
         struct FixedProvider;
 
@@ -611,15 +613,15 @@ mod tests {
             }
         }))
         .unwrap();
-        yorishiro_core::schemas::create_schema(&mut conn, workspace_id, definition)
+        yorishiro_core::repositories::schemas::create_schema(&mut conn, workspace_id, definition)
             .await
             .unwrap();
         // core's create doesn't write the embedding (that's the adapter's background sync
         // job), so this entity reproduces one left behind by a failed sync.
-        let entity = yorishiro_core::entities::create(
+        let entity = yorishiro_core::repositories::entities::create(
             &mut conn,
             workspace_id,
-            yorishiro_core::entities::CreateEntityInput {
+            yorishiro_core::repositories::entities::CreateEntityInput {
                 schema_name: "task-management".into(),
                 entity_type: "task".into(),
                 data: serde_json::json!({ "title": "orphaned" }),

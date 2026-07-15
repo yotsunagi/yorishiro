@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
-use yorishiro_core::relations::{self, RelationRecord};
+use yorishiro_core::repositories::relations::{self, RelationRecord};
 
 use crate::error::ApiError;
 use crate::http::middleware::auth::{Authorized, ReadScope, WriteScope};

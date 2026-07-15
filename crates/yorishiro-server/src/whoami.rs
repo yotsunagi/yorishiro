@@ -1,7 +1,7 @@
 use axum::Json;
 use serde::Serialize;
 use uuid::Uuid;
-use yorishiro_core::auth::ApiKeyScope;
+use yorishiro_core::services::auth::ApiKeyScope;
 
 use crate::http::middleware::auth::AuthContext;
 

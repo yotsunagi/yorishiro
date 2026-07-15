@@ -72,7 +72,7 @@ mod tests {
     use tower::ServiceExt;
     use yorishiro_core::YorishiroError;
     use yorishiro_core::db::TenantDb;
-    use yorishiro_core::embedding::EmbeddingProvider;
+    use yorishiro_core::services::embedding::EmbeddingProvider;
 
     use super::*;
     use crate::build_app;

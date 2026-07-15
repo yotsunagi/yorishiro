@@ -6,7 +6,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::tenancy::{self, MembershipRecord, MembershipRole};
+use yorishiro_core::repositories::tenancy::{self, MembershipRecord, MembershipRole};
 
 use crate::error::ApiError;
 use crate::http::middleware::auth::AuthContext;

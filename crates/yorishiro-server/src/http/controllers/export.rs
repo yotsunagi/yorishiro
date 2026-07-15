@@ -1,7 +1,7 @@
 use axum::http::header;
 use axum::response::IntoResponse;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::export;
+use yorishiro_core::repositories::export;
 
 use crate::error::ApiError;
 use crate::http::middleware::auth::{Authorized, ReadScope};

@@ -6,9 +6,9 @@ use axum::http::request::Parts;
 use sqlx::PgConnection;
 use sqlx::pool::PoolConnection;
 use yorishiro_core::YorishiroError;
-use yorishiro_core::auth;
-use yorishiro_core::auth::ApiKeyScope;
 use yorishiro_core::db::TenantDb;
+use yorishiro_core::services::auth;
+use yorishiro_core::services::auth::ApiKeyScope;
 
 use crate::error::ApiError;
 
@@ -89,7 +89,7 @@ impl RequiredScope for SchemaScope {
 /// `SchemaScope`) doubles as the scope requirement declared in the handler signature. As
 /// with the MCP adapter's `Authorized`, there is no way to obtain a `&mut PgConnection`
 /// except through this type, which structurally prevents forgetting the scope check (the
-/// core logic lives in `yorishiro_core::auth::authorize`, shared by both adapters).
+/// core logic lives in `yorishiro_core::services::auth::authorize`, shared by both adapters).
 pub struct Authorized<R> {
     pub ctx: auth::AuthContext,
     conn: PoolConnection<sqlx::Postgres>,

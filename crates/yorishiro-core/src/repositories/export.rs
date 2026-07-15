@@ -1,22 +1,12 @@
-use serde::Serialize;
 use sqlx::PgConnection;
-use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::entities::{self, EntityRecord};
 use crate::error::YorishiroError;
-use crate::relations::{self, RelationRecord};
-use crate::schemas::{self, SchemaRecord};
+use crate::repositories::entities;
+use crate::repositories::relations;
+use crate::repositories::schemas;
 
-/// One line of a JSONL export: a tagged union so schema/entity/relation records can be
-/// told apart on read-back without a separate line-position convention.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(tag = "kind", content = "record", rename_all = "snake_case")]
-pub enum ExportRecord {
-    Schema(SchemaRecord),
-    Entity(EntityRecord),
-    Relation(RelationRecord),
-}
+pub use crate::models::export::*;
 
 /// Fetches every schema (all versions, including archived), entity, and relation for the
 /// tenant, for a full-tenant data export. Schemas come first so a reader can resolve the
@@ -55,7 +45,7 @@ mod tests {
     use super::*;
     use crate::db::TenantDb;
     use crate::metaschema::MetaSchemaDefinition;
-    use crate::relations::CreateRelationInput;
+    use crate::repositories::relations::CreateRelationInput;
 
     fn task_schema() -> MetaSchemaDefinition {
         serde_json::from_value(json!({
