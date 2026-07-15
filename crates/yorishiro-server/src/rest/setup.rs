@@ -202,18 +202,10 @@ mod tests {
         crate::rest::router().with_state(state)
     }
 
-    /// `YORISHIRO_MAX_TENANTS` is process-wide state, so tests that touch it serialize through
-    /// this lock (held across the request) rather than racing each other's env var changes.
-    /// `sqlx::test` runs each test on its own single-threaded runtime, so holding a
-    /// non-`Send` `MutexGuard` across an `.await` is sound here.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn set_max_tenants(value: Option<&str>) {
-        match value {
-            Some(v) => unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", v) },
-            None => unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") },
-        }
-    }
+    /// `sqlx::test` runs each test on its own single-threaded runtime, so holding a non-`Send`
+    /// `MutexGuard` across an `.await` is sound here. See `crate::max_tenants_env_lock` for why
+    /// this lock is shared crate-wide rather than private to this module.
+    use crate::max_tenants_env_lock::{LOCK as ENV_LOCK, set as set_max_tenants};
 
     #[sqlx::test(migrations = "../../migrations")]
     #[allow(clippy::await_holding_lock)]

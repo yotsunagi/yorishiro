@@ -9,6 +9,8 @@ use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
+use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -16,6 +18,23 @@ use uuid::Uuid;
 
 use crate::auth::ApiKeyScope;
 use crate::error::YorishiroError;
+
+#[derive(Iden)]
+enum Workspaces {
+    Table,
+    Id,
+    TenantId,
+    Name,
+    MaxEntities,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum TenantMemberships {
+    Table,
+    TenantId,
+    UserId,
+}
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct TenantRecord {
@@ -306,6 +325,37 @@ pub async fn list_workspaces(
     .fetch_all(pool)
     .await
     .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Every workspace `user_id` can log into, across all of their tenant memberships -- used to
+/// resolve `POST /auth/login`'s `workspace_id` automatically when the caller omits it and the
+/// answer is unambiguous (see `rest::identity::login`).
+pub async fn list_workspaces_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<WorkspaceRecord>, YorishiroError> {
+    let (sql, values) = Query::select()
+        .columns([
+            (Workspaces::Table, Workspaces::Id),
+            (Workspaces::Table, Workspaces::TenantId),
+            (Workspaces::Table, Workspaces::Name),
+            (Workspaces::Table, Workspaces::MaxEntities),
+            (Workspaces::Table, Workspaces::CreatedAt),
+        ])
+        .from((Alias::new("identity"), Workspaces::Table))
+        .inner_join(
+            (Alias::new("identity"), TenantMemberships::Table),
+            Expr::col((TenantMemberships::Table, TenantMemberships::TenantId))
+                .equals((Workspaces::Table, Workspaces::TenantId)),
+        )
+        .and_where(Expr::col((TenantMemberships::Table, TenantMemberships::UserId)).eq(user_id))
+        .order_by((Workspaces::Table, Workspaces::CreatedAt), Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, WorkspaceRecord, _>(&sql, values)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 pub async fn get_workspace(

@@ -73,10 +73,14 @@ async function login({ email, password, workspaceId }) {
   const response = await fetch(`${apiBase()}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password, workspace_id: workspaceId }),
+    // workspace_id is omitted (rather than sent as an empty string) when the field isn't
+    // shown, so the server can auto-resolve it for the common single-workspace account.
+    body: JSON.stringify({ email, password, workspace_id: workspaceId || undefined }),
   });
   if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+    const error = new Error(await parseErrorMessage(response));
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -164,7 +168,11 @@ function renderSetupComplete(result) {
   `);
 }
 
-function renderLogin(errorMessage) {
+// `workspace_id` is only asked for when the account has access to more than one workspace --
+// the server reports that with a 422, which is when `needsWorkspaceId` flips to true. Every
+// community-edition deployment has exactly one workspace by default, so the common case never
+// shows this field at all.
+function renderLogin(errorMessage, needsWorkspaceId = false) {
   const view = el(`
     <div>
       <h1>Yorishiro</h1>
@@ -176,10 +184,14 @@ function renderLogin(errorMessage) {
         <label>Password
           <input type="password" name="password" required autocomplete="current-password">
         </label>
-        <label>Workspace ID
-          <input type="text" name="workspaceId" required placeholder="00000000-0000-0000-0000-000000000000">
-        </label>
-        <p class="hint">Ask a tenant owner for your workspace's id, or find it in your signup response.</p>
+        ${
+          needsWorkspaceId
+            ? `<label>Workspace ID
+                 <input type="text" name="workspaceId" required placeholder="00000000-0000-0000-0000-000000000000">
+               </label>
+               <p class="hint">This account has access to more than one workspace -- find its id in your signup response, or ask a tenant owner.</p>`
+            : ""
+        }
         ${errorMessage ? `<p class="error">${errorMessage}</p>` : ""}
         <button type="submit">Sign in</button>
       </form>
@@ -198,7 +210,7 @@ function renderLogin(errorMessage) {
       setSession({ apiKey: result.api_key, email: result.email ?? form.get("email") });
       location.hash = "#/dashboard";
     } catch (err) {
-      mount(renderLogin(err.message));
+      mount(renderLogin(err.message, needsWorkspaceId || err.status === 422));
     }
   });
 

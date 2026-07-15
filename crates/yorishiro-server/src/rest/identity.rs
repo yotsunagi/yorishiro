@@ -103,8 +103,12 @@ pub struct LoginRequest {
     pub email: String,
     pub password: String,
     /// Which of the account's workspaces to issue an API key for -- a key is always scoped to
-    /// exactly one workspace, same as one created through `admin create-api-key`.
-    pub workspace_id: Uuid,
+    /// exactly one workspace, same as one created through `admin create-api-key`. Omit this
+    /// when the account can only ever log into one workspace (true for every community-edition
+    /// deployment, since `YORISHIRO_MAX_TENANTS` defaults to a single tenant with one
+    /// workspace) -- it resolves automatically. An account with access to more than one
+    /// workspace must specify which one explicitly (422 otherwise).
+    pub workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -127,6 +131,7 @@ pub struct LoginResponse {
         (status = 401, description = "Invalid email or password", body = crate::error::ApiErrorBody),
         (status = 403, description = "Not a member of this workspace's tenant", body = crate::error::ApiErrorBody),
         (status = 404, description = "Workspace not found", body = crate::error::ApiErrorBody),
+        (status = 422, description = "workspace_id omitted, and the account has zero or multiple workspaces to choose from", body = crate::error::ApiErrorBody),
         (status = 429, description = "Too many requests from this caller; retry later"),
     ),
     security(()),
@@ -142,7 +147,34 @@ pub async fn login(
         .await?
         .ok_or(YorishiroError::Unauthenticated)?;
 
-    let workspace = tenancy::get_workspace(&state.identity_pool, body.workspace_id).await?;
+    let workspace = match body.workspace_id {
+        Some(workspace_id) => tenancy::get_workspace(&state.identity_pool, workspace_id).await?,
+        // Every community-edition deployment has exactly one workspace by default (see
+        // YORISHIRO_MAX_TENANTS), so resolving it automatically here means the login form
+        // never needs to ask for a workspace id in the common case.
+        None => {
+            let mut workspaces =
+                tenancy::list_workspaces_for_user(&state.identity_pool, user.id).await?;
+            match workspaces.len() {
+                1 => workspaces.pop().expect("len() == 1 checked above"),
+                0 => {
+                    return Err(YorishiroError::ScopeInsufficient {
+                        message: "this account is not a member of any tenant".into(),
+                        hint: "ask a tenant admin to add you as a member first".into(),
+                    }
+                    .into());
+                }
+                _ => {
+                    return Err(YorishiroError::ValidationFailed {
+                        message: "this account has access to more than one workspace".into(),
+                        details: vec![],
+                        hint: "specify workspace_id explicitly".into(),
+                    }
+                    .into());
+                }
+            }
+        }
+    };
 
     let role = tenancy::get_membership_role(&state.identity_pool, workspace.tenant_id, user.id)
         .await?

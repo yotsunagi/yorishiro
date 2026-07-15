@@ -90,4 +90,4 @@ $ git tag vX.Y.Z && git push origin vX.Y.Z
 
 ## シングルテナント構成
 
-`YORISHIRO_MAX_TENANTS=1`・`YSR_EMBEDDING_PROVIDER=local`(いずれも[configuration.md](configuration.md)参照)は共に既定値なので、これらを未設定のままにしたデプロイはそのまま[`web/`](../web)のSPA(バイナリに組み込み済み)を配信し、そのセットアップウィザード([setup.md](setup.md#初回セットアップ)参照)だけでデプロイの唯一のテナントをオンボードでき、埋め込みにはローカルONNXモデルを使います。テナント上限を外すには`YORISHIRO_MAX_TENANTS=0`を設定してください。
+`YORISHIRO_MAX_TENANTS=1`・`YSR_EMBEDDING_PROVIDER=local`(いずれも[configuration.md](configuration.md)参照)は共に既定値なので、これらを未設定のままにしたデプロイはそのまま[`web/`](../crates/yorishiro-web/web)のSPA(バイナリに組み込み済み)を配信し、そのセットアップウィザード([setup.md](setup.md#初回セットアップ)参照)だけでデプロイの唯一のテナントをオンボードでき、埋め込みにはローカルONNXモデルを使います。テナント上限を外すには`YORISHIRO_MAX_TENANTS=0`を設定してください。

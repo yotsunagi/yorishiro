@@ -26,6 +26,23 @@ mod whoami;
 
 pub use state::AppState;
 
+/// `YORISHIRO_MAX_TENANTS` is process-wide state read by both `rest::setup` and login's
+/// workspace auto-resolution, so every test across the crate that sets it (rather than just
+/// asserting the default) must serialize through this one shared lock -- a per-module lock
+/// only prevents that module's own tests from racing each other, not tests in a different
+/// module running concurrently in the same `cargo test` process.
+#[cfg(test)]
+pub(crate) mod max_tenants_env_lock {
+    pub static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub fn set(value: Option<&str>) {
+        match value {
+            Some(v) => unsafe { std::env::set_var("YORISHIRO_MAX_TENANTS", v) },
+            None => unsafe { std::env::remove_var("YORISHIRO_MAX_TENANTS") },
+        }
+    }
+}
+
 /// Starts a graceful shutdown on either SIGTERM (the standard stop signal from container
 /// orchestrators) or Ctrl-C.
 pub async fn shutdown_signal() {
@@ -1650,6 +1667,125 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn login_resolves_the_workspace_automatically_when_the_account_has_exactly_one(
+        pool: PgPool,
+    ) {
+        let tenant = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        let workspace = tenancy::create_workspace(&pool, tenant.id, "main", None)
+            .await
+            .unwrap();
+        let (_invite, token) = tenancy::create_invite(
+            &pool,
+            tenant.id,
+            "member@example.com",
+            tenancy::MembershipRole::Member,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let app = build_app(test_state(pool), None);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/signup",
+            None,
+            Some(serde_json::json!({
+                "invite_token": token,
+                "password": "hunter2-hunter2",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // workspace_id omitted -- the account is only a member of one tenant with one
+        // workspace, so it should resolve unambiguously.
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/login",
+            None,
+            Some(serde_json::json!({
+                "email": "member@example.com",
+                "password": "hunter2-hunter2",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = rest_json_body(response).await;
+        assert_eq!(body["workspace_id"], workspace.id.to_string());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    #[allow(clippy::await_holding_lock)]
+    async fn login_requires_workspace_id_when_the_account_has_access_to_more_than_one(
+        pool: PgPool,
+    ) {
+        // Creating a second tenant requires lifting the default single-tenant cap -- see
+        // `crate::max_tenants_env_lock` for why this is a shared, crate-wide lock.
+        let _guard = crate::max_tenants_env_lock::LOCK.lock().unwrap();
+        crate::max_tenants_env_lock::set(Some("0"));
+
+        let tenant_a = tenancy::create_tenant(&pool, "acme", None).await.unwrap();
+        tenancy::create_workspace(&pool, tenant_a.id, "main", None)
+            .await
+            .unwrap();
+        let tenant_b = tenancy::create_tenant(&pool, "beta", None).await.unwrap();
+        tenancy::create_workspace(&pool, tenant_b.id, "main", None)
+            .await
+            .unwrap();
+
+        let user = tenancy::create_user(&pool, "multi@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant_a.id, user.id, tenancy::MembershipRole::Member)
+            .await
+            .unwrap();
+        tenancy::add_member(&pool, tenant_b.id, user.id, tenancy::MembershipRole::Member)
+            .await
+            .unwrap();
+
+        let app = build_app(test_state(pool), None);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/login",
+            None,
+            Some(serde_json::json!({
+                "email": "multi@example.com",
+                "password": "hunter2-hunter2",
+            })),
+        )
+        .await;
+        crate::max_tenants_env_lock::set(None);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn login_rejects_an_account_with_no_tenant_membership(pool: PgPool) {
+        tenancy::create_user(&pool, "orphan@example.com", "hunter2-hunter2", None)
+            .await
+            .unwrap();
+
+        let app = build_app(test_state(pool), None);
+
+        let response = rest_request(
+            &app,
+            "POST",
+            "/auth/login",
+            None,
+            Some(serde_json::json!({
+                "email": "orphan@example.com",
+                "password": "hunter2-hunter2",
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[sqlx::test(migrations = "../../migrations")]

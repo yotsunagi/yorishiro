@@ -105,4 +105,4 @@ $ git tag vX.Y.Z && git push origin vX.Y.Z
 
 ## Single-tenant mode
 
-`YORISHIRO_MAX_TENANTS=1` and `YSR_EMBEDDING_PROVIDER=local` (see [configuration.md](configuration.md)) are both defaults, so a deployment that leaves them unset already serves the [`web/`](../web) SPA (compiled into the binary), whose setup wizard (see [setup.md](setup.md#first-run-setup)) is enough to onboard the deployment's one tenant, and embeds using the local ONNX model. Set `YORISHIRO_MAX_TENANTS=0` to lift the tenant cap instead.
+`YORISHIRO_MAX_TENANTS=1` and `YSR_EMBEDDING_PROVIDER=local` (see [configuration.md](configuration.md)) are both defaults, so a deployment that leaves them unset already serves the [`web/`](../crates/yorishiro-web/web) SPA (compiled into the binary), whose setup wizard (see [setup.md](setup.md#first-run-setup)) is enough to onboard the deployment's one tenant, and embeds using the local ONNX model. Set `YORISHIRO_MAX_TENANTS=0` to lift the tenant cap instead.

@@ -1,4 +1,4 @@
-//! Serves the Yorishiro setup/login/admin-dashboard SPA (`web/` at the repo root), compiled
+//! Serves the Yorishiro setup/login/admin-dashboard SPA (this crate's own `web/`), compiled
 //! into the binary at build time via `rust-embed`. This is what lets `yorishiro-server` (and,
 //! via that crate's `build_app`, `yorishiro-hosted-server` too -- see that repo) serve a working
 //! web UI without a deployment needing to separately fetch and place a `web/` directory
@@ -19,7 +19,7 @@ use axum::routing::{MethodRouter, get};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../../web/"]
+#[folder = "web/"]
 struct Assets;
 
 /// Maps a request path to the asset path it should serve: `/` (and the empty path) map to
