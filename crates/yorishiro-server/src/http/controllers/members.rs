@@ -8,8 +8,8 @@ use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::tenancy::{self, MembershipRecord, MembershipRole};
 
-use crate::auth::AuthContext;
 use crate::error::ApiError;
+use crate::http::middleware::auth::AuthContext;
 use crate::state::AppState;
 
 /// Membership management is a tenant-wide concern, independent of (and stricter than) the

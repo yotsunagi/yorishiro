@@ -9,8 +9,8 @@ use uuid::Uuid;
 use yorishiro_core::entities::{self, EntityRecord};
 use yorishiro_core::recall::{self, RecallContext};
 
-use crate::auth::{Authorized, ReadScope, WriteScope};
 use crate::error::ApiError;
+use crate::http::middleware::auth::{Authorized, ReadScope, WriteScope};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -154,7 +154,7 @@ pub async fn list_entities(
     let default = entities::ListEntitiesQuery::default();
     let query = entities::ListEntitiesQuery {
         entity_type: params.entity_type,
-        filter: crate::rest::parse_filter_param(params.filter)?,
+        filter: crate::http::controllers::parse_filter_param(params.filter)?,
         limit: params.limit.unwrap_or(default.limit),
         offset: params.offset.unwrap_or(default.offset),
     };

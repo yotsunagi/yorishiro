@@ -9,8 +9,8 @@ use yorishiro_core::metaschema::{self, MetaSchemaDefinition, VersioningDiff};
 use yorishiro_core::schemas::{self, SchemaRecord, SchemaSummary};
 use yorishiro_core::templates::{self, TemplateSummary};
 
-use crate::auth::{Authorized, ReadScope, SchemaScope};
 use crate::error::ApiError;
+use crate::http::middleware::auth::{Authorized, ReadScope, SchemaScope};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateSchemaResponse {

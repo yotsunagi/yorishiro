@@ -8,8 +8,8 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use yorishiro_core::relations::{self, RelationRecord};
 
-use crate::auth::{Authorized, ReadScope, WriteScope};
 use crate::error::ApiError;
+use crate::http::middleware::auth::{Authorized, ReadScope, WriteScope};
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateRelationRequest {

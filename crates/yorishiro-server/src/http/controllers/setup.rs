@@ -210,7 +210,7 @@ mod tests {
             pool,
             std::sync::Arc::new(UnreachableEmbeddingProvider),
         );
-        crate::rest::router().with_state(state)
+        crate::http::controllers::router().with_state(state)
     }
 
     /// `sqlx::test` runs each test on its own single-threaded runtime, so holding a non-`Send`

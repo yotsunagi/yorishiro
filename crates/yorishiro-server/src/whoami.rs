@@ -3,7 +3,7 @@ use serde::Serialize;
 use uuid::Uuid;
 use yorishiro_core::auth::ApiKeyScope;
 
-use crate::auth::AuthContext;
+use crate::http::middleware::auth::AuthContext;
 
 #[derive(Serialize)]
 pub struct WhoAmIResponse {

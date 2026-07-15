@@ -123,7 +123,8 @@ pub fn router() -> Router<AppState> {
     // Signup/login are the only bearer-token-free endpoints, so they're the only ones an
     // unauthenticated attacker can brute-force (invite tokens, passwords). Rate-limited by
     // client IP; see `rate_limit::RateLimiter`.
-    let rate_limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::from_env());
+    let rate_limiter =
+        std::sync::Arc::new(crate::http::middleware::rate_limit::RateLimiter::from_env());
     let auth_routes = Router::new()
         .route("/auth/signup", post(identity::signup))
         .route("/auth/login", post(identity::login))
@@ -131,7 +132,7 @@ pub fn router() -> Router<AppState> {
         .route("/setup/status", get(setup::status))
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
-            crate::rate_limit::enforce,
+            crate::http::middleware::rate_limit::enforce,
         ));
 
     Router::new()

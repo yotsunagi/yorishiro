@@ -3,8 +3,8 @@ use axum::response::IntoResponse;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::export;
 
-use crate::auth::{Authorized, ReadScope};
 use crate::error::ApiError;
+use crate::http::middleware::auth::{Authorized, ReadScope};
 
 /// Line-delimited JSON export of every schema, entity, and relation belonging to the
 /// tenant, one `{"kind":"schema"|"entity"|"relation","record":{...}}` object per line.

@@ -5,8 +5,8 @@ use utoipa::IntoParams;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::search::{self, SearchHit};
 
-use crate::auth::{ReadScope, Verified};
 use crate::error::ApiError;
+use crate::http::middleware::auth::{ReadScope, Verified};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -39,7 +39,7 @@ pub async fn search_entities(
     let default = search::SearchQuery::default();
     let query = search::SearchQuery {
         entity_type: params.entity_type,
-        filter: crate::rest::parse_filter_param(params.filter)?,
+        filter: crate::http::controllers::parse_filter_param(params.filter)?,
         limit: params.limit.unwrap_or(default.limit),
     };
 
