@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Connection, PgConnection};
@@ -7,6 +9,18 @@ use uuid::Uuid;
 
 use crate::error::YorishiroError;
 use crate::metaschema::{self, MetaSchemaDefinition, VersioningDiff, validate_definition};
+
+#[derive(Iden)]
+enum Schemas {
+    Table,
+    Id,
+    WorkspaceId,
+    Name,
+    Version,
+    Definition,
+    Status,
+    CreatedAt,
+}
 
 /// Represents a row in the `schemas` table. `definition` is JSONB in the DB, but the
 /// application layer always treats it as a parsed `MetaSchemaDefinition`.
@@ -66,14 +80,36 @@ pub async fn list(
     conn: &mut PgConnection,
     workspace_id: Uuid,
 ) -> Result<Vec<SchemaSummary>, YorishiroError> {
-    sqlx::query_as::<_, SchemaSummary>(
-        "SELECT id, name, version, status, created_at \
-         FROM content.schemas WHERE workspace_id = $1 ORDER BY name, version",
-    )
-    .bind(workspace_id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns([
+            Schemas::Id,
+            Schemas::Name,
+            Schemas::Version,
+            Schemas::Status,
+            Schemas::CreatedAt,
+        ])
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .order_by(Schemas::Name, Order::Asc)
+        .order_by(Schemas::Version, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, SchemaSummary, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+fn schema_columns() -> [Schemas; 7] {
+    [
+        Schemas::Id,
+        Schemas::WorkspaceId,
+        Schemas::Name,
+        Schemas::Version,
+        Schemas::Definition,
+        Schemas::Status,
+        Schemas::CreatedAt,
+    ]
 }
 
 /// Fetches the currently active schema (the latest version with status='active') for
@@ -83,16 +119,19 @@ pub async fn get_active_schema(
     workspace_id: Uuid,
     name: &str,
 ) -> Result<SchemaRecord, YorishiroError> {
-    let row = sqlx::query_as::<_, SchemaRow>(
-        "SELECT id, workspace_id, name, version, definition, status, created_at \
-         FROM content.schemas WHERE workspace_id = $1 AND name = $2 AND status = 'active' \
-         ORDER BY version DESC LIMIT 1",
-    )
-    .bind(workspace_id)
-    .bind(name)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .columns(schema_columns())
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Schemas::Name).eq(name))
+        .and_where(Expr::col(Schemas::Status).eq("active"))
+        .order_by(Schemas::Version, Order::Desc)
+        .limit(1)
+        .build_sqlx(PostgresQueryBuilder);
+    let row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     match row {
         Some(row) => row.into_record(),
@@ -109,15 +148,16 @@ pub async fn get_by_id(
     workspace_id: Uuid,
     schema_id: Uuid,
 ) -> Result<SchemaRecord, YorishiroError> {
-    let row = sqlx::query_as::<_, SchemaRow>(
-        "SELECT id, workspace_id, name, version, definition, status, created_at \
-         FROM content.schemas WHERE workspace_id = $1 AND id = $2",
-    )
-    .bind(workspace_id)
-    .bind(schema_id)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .columns(schema_columns())
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Schemas::Id).eq(schema_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     match row {
         Some(row) => row.into_record(),
@@ -133,14 +173,17 @@ pub async fn export_all(
     conn: &mut PgConnection,
     workspace_id: Uuid,
 ) -> Result<Vec<SchemaRecord>, YorishiroError> {
-    let rows = sqlx::query_as::<_, SchemaRow>(
-        "SELECT id, workspace_id, name, version, definition, status, created_at \
-         FROM content.schemas WHERE workspace_id = $1 ORDER BY name, version",
-    )
-    .bind(workspace_id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .columns(schema_columns())
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .order_by(Schemas::Name, Order::Asc)
+        .order_by(Schemas::Version, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+    let rows: Vec<SchemaRow> = sqlx::query_as_with(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     rows.into_iter().map(SchemaRow::into_record).collect()
 }
@@ -168,22 +211,28 @@ pub async fn create_schema(
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))?;
 
+    // `pg_advisory_xact_lock(...)` is a lock-acquisition function call, not a table operation --
+    // no SELECT/INSERT/UPDATE/DELETE form exists for sea-query to build, same category as the
+    // session commands in `db.rs`/`auth.rs`.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("{workspace_id}:{name}"))
         .execute(&mut *tx)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))?;
 
-    let previous_row = sqlx::query_as::<_, SchemaRow>(
-        "SELECT id, workspace_id, name, version, definition, status, created_at \
-         FROM content.schemas WHERE workspace_id = $1 AND name = $2 AND status = 'active' \
-         ORDER BY version DESC LIMIT 1",
-    )
-    .bind(workspace_id)
-    .bind(&name)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .columns(schema_columns())
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Schemas::Name).eq(&name))
+        .and_where(Expr::col(Schemas::Status).eq("active"))
+        .order_by(Schemas::Version, Order::Desc)
+        .limit(1)
+        .build_sqlx(PostgresQueryBuilder);
+    let previous_row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     let (next_version, diff) = match previous_row {
         Some(row) => {
@@ -200,44 +249,56 @@ pub async fn create_schema(
         ),
     };
 
-    sqlx::query(
-        "UPDATE content.schemas SET status = 'archived' \
-         WHERE workspace_id = $1 AND name = $2 AND status = 'active'",
-    )
-    .bind(workspace_id)
-    .bind(&name)
-    .execute(&mut *tx)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::update()
+        .table((Alias::new("content"), Schemas::Table))
+        .values([(Schemas::Status, "archived".into())])
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Schemas::Name).eq(&name))
+        .and_where(Expr::col(Schemas::Status).eq("active"))
+        .build_sqlx(PostgresQueryBuilder);
+    sqlx::query_with(&sql, values)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     let definition_json =
         serde_json::to_value(&definition).map_err(|err| YorishiroError::Internal(err.into()))?;
 
-    let row = sqlx::query_as::<_, SchemaRow>(
-        "INSERT INTO content.schemas (workspace_id, name, version, definition, status) \
-         VALUES ($1, $2, $3, $4, 'active') \
-         RETURNING id, workspace_id, name, version, definition, status, created_at",
-    )
-    .bind(workspace_id)
-    .bind(&name)
-    .bind(next_version)
-    .bind(definition_json)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|err| {
-        if err
-            .as_database_error()
-            .is_some_and(|db_err| db_err.is_unique_violation())
-        {
-            YorishiroError::Conflict {
-                message: format!(
-                    "schema '{name}' version {next_version} already exists (concurrent create?)"
-                ),
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("content"), Schemas::Table))
+        .columns([
+            Schemas::WorkspaceId,
+            Schemas::Name,
+            Schemas::Version,
+            Schemas::Definition,
+            Schemas::Status,
+        ])
+        .values_panic([
+            workspace_id.into(),
+            name.clone().into(),
+            next_version.into(),
+            definition_json.into(),
+            "active".into(),
+        ])
+        .returning(Query::returning().columns(schema_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+    let row: SchemaRow = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|err| {
+            if err
+                .as_database_error()
+                .is_some_and(|db_err| db_err.is_unique_violation())
+            {
+                YorishiroError::Conflict {
+                    message: format!(
+                        "schema '{name}' version {next_version} already exists (concurrent create?)"
+                    ),
+                }
+            } else {
+                YorishiroError::Internal(err.into())
             }
-        } else {
-            YorishiroError::Internal(err.into())
-        }
-    })?;
+        })?;
 
     tx.commit()
         .await
@@ -271,21 +332,7 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        (tenant_id, workspace_id)
+        crate::test_support::seed_tenant_and_workspace(pool).await
     }
 
     #[sqlx::test(migrations = "../../migrations")]

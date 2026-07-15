@@ -255,21 +255,7 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        (tenant_id, workspace_id)
+        crate::test_support::seed_tenant_and_workspace(pool).await
     }
 
     async fn seed_embedded_entity(

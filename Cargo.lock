@@ -4611,6 +4611,8 @@ dependencies = [
  "http",
  "rmcp",
  "schemars",
+ "sea-query",
+ "sea-query-binder",
  "serde",
  "serde_json",
  "serde_yaml_ng",

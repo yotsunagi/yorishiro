@@ -270,14 +270,25 @@ pub async fn export_all(
     conn: &mut PgConnection,
     workspace_id: Uuid,
 ) -> Result<Vec<RelationRecord>, YorishiroError> {
-    sqlx::query_as::<_, RelationRecord>(
-        "SELECT id, workspace_id, source_id, target_id, relation_type, properties, created_at \
-         FROM content.relations WHERE workspace_id = $1 ORDER BY created_at",
-    )
-    .bind(workspace_id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns([
+            Relations::Id,
+            Relations::WorkspaceId,
+            Relations::SourceId,
+            Relations::TargetId,
+            Relations::RelationType,
+            Relations::Properties,
+            Relations::CreatedAt,
+        ])
+        .from((Alias::new("content"), Relations::Table))
+        .and_where(Expr::col(Relations::WorkspaceId).eq(workspace_id))
+        .order_by(Relations::CreatedAt, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, RelationRecord, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 pub const DEFAULT_NEIGHBORS_LIMIT: i64 = 20;
@@ -351,6 +362,13 @@ pub async fn neighbors(
 ) -> Result<Vec<Neighbor>, YorishiroError> {
     let limit = limit.clamp(1, 200);
 
+    // sea-query can express a UNION ALL of two joined SELECTs and an ORDER BY/LIMIT applied to
+    // the union, but only by building each branch as a full, separate `Query::select()` and
+    // combining them -- for a query already this wide (14 aliased output columns each side,
+    // two joins, a computed direction literal), that ends up materially harder to read than
+    // the plain SQL below, with no behavioral upside. Kept raw as a deliberate readability
+    // call, not because it's structurally inexpressible (contrast the `db.rs`/`auth.rs`
+    // session-command and SECURITY DEFINER cases, which have no builder form at all).
     let rows = sqlx::query_as::<_, NeighborRow>(
         "SELECT r.id AS relation_id, r.relation_type, 'out' AS direction, r.properties, \
                 r.created_at AS relation_created_at, \
@@ -405,21 +423,7 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        (tenant_id, workspace_id)
+        crate::test_support::seed_tenant_and_workspace(pool).await
     }
 
     async fn seed_task_and_project(

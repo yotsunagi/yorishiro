@@ -301,21 +301,7 @@ mod tests {
 
     use super::*;
     use crate::db::TenantDb;
-
-    #[derive(Iden)]
-    enum Tenants {
-        Table,
-        Id,
-        Name,
-    }
-
-    #[derive(Iden)]
-    enum Workspaces {
-        Table,
-        Id,
-        TenantId,
-        Name,
-    }
+    use crate::test_support;
 
     #[derive(Iden)]
     enum Users {
@@ -327,28 +313,7 @@ mod tests {
 
     /// Seeds a tenant plus one workspace under it, returning `(tenant_id, workspace_id)`.
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (sql, values) = Query::insert()
-            .into_table((Alias::new("identity"), Tenants::Table))
-            .columns([Tenants::Name])
-            .values_panic(["test-tenant".into()])
-            .returning(Query::returning().columns([Tenants::Id]))
-            .build_sqlx(PostgresQueryBuilder);
-        let (tenant_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-
-        let (sql, values) = Query::insert()
-            .into_table((Alias::new("identity"), Workspaces::Table))
-            .columns([Workspaces::TenantId, Workspaces::Name])
-            .values_panic([tenant_id.into(), "test-workspace".into()])
-            .returning(Query::returning().columns([Workspaces::Id]))
-            .build_sqlx(PostgresQueryBuilder);
-        let (workspace_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        (tenant_id, workspace_id)
+        test_support::seed_tenant_and_workspace(pool).await
     }
 
     #[sqlx::test(migrations = "../../migrations")]

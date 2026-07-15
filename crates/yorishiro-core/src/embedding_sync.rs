@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use sea_query::{Alias, Expr, Iden, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -8,6 +10,15 @@ use crate::entities::EntityRecord;
 use crate::error::YorishiroError;
 use crate::metaschema::EntityTypeDef;
 use crate::schemas;
+
+#[derive(Iden)]
+enum Entities {
+    Table,
+    Id,
+    WorkspaceId,
+    UpdatedAt,
+    Embedding,
+}
 
 /// Concatenates the values of `x-embed` fields as `"field: value"` to build the
 /// text to embed. Field names are kept because bare values would lose semantic
@@ -65,17 +76,18 @@ pub async fn sync_embedding(
     // updates to the same entity complete out of order due to differing
     // embedding API latencies (writing the embedding itself doesn't change
     // `updated_at`, so this condition never blocks a subsequent legitimate sync).
-    let result = sqlx::query(
-        "UPDATE content.entities SET embedding = $1 \
-         WHERE workspace_id = $2 AND id = $3 AND updated_at = $4",
-    )
-    .bind(pgvector::Vector::from(vector))
-    .bind(workspace_id)
-    .bind(entity_id)
-    .bind(snapshot_updated_at)
-    .execute(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::update()
+        .table((Alias::new("content"), Entities::Table))
+        .values([(Entities::Embedding, pgvector::Vector::from(vector).into())])
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Entities::Id).eq(entity_id))
+        .and_where(Expr::col(Entities::UpdatedAt).eq(snapshot_updated_at))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let result = sqlx::query_with(&sql, values)
+        .execute(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     if result.rows_affected() == 0 {
         tracing::debug!(
@@ -133,7 +145,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use sqlx::PgPool;
-    use sqlx::Row;
 
     use super::*;
     use crate::db::TenantDb;
@@ -213,21 +224,23 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        (tenant_id, workspace_id)
+        crate::test_support::seed_tenant_and_workspace(pool).await
+    }
+
+    async fn has_embedding(conn: &mut PgConnection, entity_id: Uuid) -> bool {
+        let (sql, values) = Query::select()
+            .expr_as(
+                Expr::col(Entities::Embedding).is_not_null(),
+                Alias::new("has_embedding"),
+            )
+            .from((Alias::new("content"), Entities::Table))
+            .and_where(Expr::col(Entities::Id).eq(entity_id))
+            .build_sqlx(PostgresQueryBuilder);
+        let (has_embedding,): (bool,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        has_embedding
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -275,14 +288,7 @@ mod tests {
 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
-        let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
-        )
-        .bind(entity.id)
-        .fetch_one(&mut *conn)
-        .await
-        .unwrap();
-        let has_embedding: bool = row.get("has_embedding");
+        let has_embedding = has_embedding(&mut conn, entity.id).await;
         assert!(has_embedding);
     }
 
@@ -318,14 +324,7 @@ mod tests {
 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
-        let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
-        )
-        .bind(entity.id)
-        .fetch_one(&mut *conn)
-        .await
-        .unwrap();
-        let has_embedding: bool = row.get("has_embedding");
+        let has_embedding = has_embedding(&mut conn, entity.id).await;
         assert!(has_embedding);
     }
 
@@ -374,14 +373,7 @@ mod tests {
 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
 
-        let row = sqlx::query(
-            "SELECT embedding IS NOT NULL AS has_embedding FROM content.entities WHERE id = $1",
-        )
-        .bind(entity.id)
-        .fetch_one(&mut *conn)
-        .await
-        .unwrap();
-        let has_embedding: bool = row.get("has_embedding");
+        let has_embedding = has_embedding(&mut conn, entity.id).await;
         assert!(!has_embedding);
     }
 

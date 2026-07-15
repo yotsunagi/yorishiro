@@ -191,6 +191,8 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use sea_query::{Alias, Iden, PostgresQueryBuilder, Query};
+    use sea_query_binder::SqlxBinder;
     use sqlx::PgPool;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -200,6 +202,21 @@ mod tests {
 
     use super::*;
     use yorishiro_core::db::TenantDb;
+
+    #[derive(Iden)]
+    enum Tenants {
+        Table,
+        Id,
+        Name,
+    }
+
+    #[derive(Iden)]
+    enum Workspaces {
+        Table,
+        Id,
+        TenantId,
+        Name,
+    }
 
     /// Tests shouldn't call out to a remote embeddings service, so this dummy provider only
     /// satisfies the dimension count (and errors immediately if actually invoked).
@@ -243,20 +260,27 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        let (sql, values) = Query::insert()
+            .into_table((Alias::new("identity"), Tenants::Table))
+            .columns([Tenants::Name])
+            .values_panic(["test-tenant".into()])
+            .returning(Query::returning().columns([Tenants::Id]))
+            .build_sqlx(PostgresQueryBuilder);
+        let (tenant_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        let (sql, values) = Query::insert()
+            .into_table((Alias::new("identity"), Workspaces::Table))
+            .columns([Workspaces::TenantId, Workspaces::Name])
+            .values_panic([tenant_id.into(), "test-workspace".into()])
+            .returning(Query::returning().columns([Workspaces::Id]))
+            .build_sqlx(PostgresQueryBuilder);
+        let (workspace_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(pool)
+            .await
+            .unwrap();
         (tenant_id, workspace_id)
     }
 

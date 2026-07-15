@@ -1,9 +1,38 @@
 use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
+use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use sqlx::PgPool;
 use uuid::Uuid;
 use yorishiro_core::auth::{self, ApiKeyScope, CreatedApiKey};
 use yorishiro_core::tenancy::{self, MembershipRole};
+
+#[derive(Iden)]
+enum Workspaces {
+    Table,
+    Id,
+    TenantId,
+}
+
+#[derive(Iden)]
+enum ApiKeys {
+    Table,
+    Id,
+    WorkspaceId,
+    Scope,
+    KeyPrefix,
+    UserId,
+    CreatedAt,
+    LastUsedAt,
+}
+
+#[derive(Iden)]
+enum Entities {
+    Table,
+    Id,
+    WorkspaceId,
+    Embedding,
+}
 
 /// Subcommands under `yorishiro-server admin`. API keys are stored only as SHA-256 hashes and
 /// user passwords only as argon2 hashes, so neither can be provisioned by hand in SQL — this
@@ -312,11 +341,14 @@ async fn create_api_key(
     user_id: Option<Uuid>,
 ) -> Result<CreatedApiKey> {
     // Check the workspace exists up front so the error is clearer than a raw FK violation.
-    let tenant_id: Option<(Uuid,)> =
-        sqlx::query_as("SELECT tenant_id FROM identity.workspaces WHERE id = $1")
-            .bind(workspace_id)
-            .fetch_optional(pool)
-            .await?;
+    let (sql, values) = Query::select()
+        .column(Workspaces::TenantId)
+        .from((Alias::new("identity"), Workspaces::Table))
+        .and_where(Expr::col(Workspaces::Id).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let tenant_id: Option<(Uuid,)> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(pool)
+        .await?;
     let Some((tenant_id,)) = tenant_id else {
         bail!(
             "workspace '{workspace_id}' does not exist (see `admin list-workspaces <tenant-id>`)"
@@ -358,23 +390,31 @@ struct ApiKeySummary {
 }
 
 async fn list_api_keys(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<ApiKeySummary>> {
-    let rows = sqlx::query_as::<_, ApiKeySummary>(
-        "SELECT id, scope, key_prefix, user_id, created_at, last_used_at \
-         FROM identity.api_keys WHERE workspace_id = $1 ORDER BY created_at",
-    )
-    .bind(workspace_id)
-    .fetch_all(pool)
-    .await?;
+    let (sql, values) = Query::select()
+        .columns([
+            ApiKeys::Id,
+            ApiKeys::Scope,
+            ApiKeys::KeyPrefix,
+            ApiKeys::UserId,
+            ApiKeys::CreatedAt,
+            ApiKeys::LastUsedAt,
+        ])
+        .from((Alias::new("identity"), ApiKeys::Table))
+        .and_where(Expr::col(ApiKeys::WorkspaceId).eq(workspace_id))
+        .order_by(ApiKeys::CreatedAt, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+    let rows: Vec<ApiKeySummary> = sqlx::query_as_with(&sql, values).fetch_all(pool).await?;
     Ok(rows)
 }
 
 /// Authentication looks up the key in the database on every request, so deleting the row
 /// revokes it immediately.
 async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<()> {
-    let result = sqlx::query("DELETE FROM identity.api_keys WHERE id = $1")
-        .bind(key_id)
-        .execute(pool)
-        .await?;
+    let (sql, values) = Query::delete()
+        .from_table((Alias::new("identity"), ApiKeys::Table))
+        .and_where(Expr::col(ApiKeys::Id).eq(key_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let result = sqlx::query_with(&sql, values).execute(pool).await?;
     if result.rows_affected() == 0 {
         bail!("api key '{key_id}' does not exist (see `admin list-api-keys <workspace-id>`)");
     }
@@ -395,12 +435,13 @@ async fn resync_embeddings(
     workspace_id: Uuid,
     provider: &dyn yorishiro_core::embedding::EmbeddingProvider,
 ) -> Result<ResyncReport> {
-    let ids: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM content.entities WHERE workspace_id = $1 AND embedding IS NULL",
-    )
-    .bind(workspace_id)
-    .fetch_all(pool)
-    .await?;
+    let (sql, values) = Query::select()
+        .column(Entities::Id)
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Entities::Embedding).is_null())
+        .build_sqlx(PostgresQueryBuilder);
+    let ids: Vec<(Uuid,)> = sqlx::query_as_with(&sql, values).fetch_all(pool).await?;
 
     let mut report = ResyncReport {
         candidates: ids.len(),
@@ -596,12 +637,15 @@ mod tests {
         assert_eq!(report.synced, 1);
         assert_eq!(report.failed, 0);
 
-        let (has_embedding,): (bool,) =
-            sqlx::query_as("SELECT embedding IS NOT NULL FROM content.entities WHERE id = $1")
-                .bind(entity.id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (sql, values) = Query::select()
+            .expr(Expr::col(Entities::Embedding).is_not_null())
+            .from((Alias::new("content"), Entities::Table))
+            .and_where(Expr::col(Entities::Id).eq(entity.id))
+            .build_sqlx(PostgresQueryBuilder);
+        let (has_embedding,): (bool,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert!(has_embedding);
     }
 

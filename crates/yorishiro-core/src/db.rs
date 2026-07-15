@@ -96,19 +96,11 @@ mod tests {
     use sqlx::PgPool;
     use sqlx::Row;
 
-    use super::*;
-
-    #[derive(Iden)]
-    enum Tenants {
-        Table,
-        Id,
-        Name,
-    }
+    use crate::test_support;
 
     #[derive(Iden)]
     enum Workspaces {
         Table,
-        TenantId,
         Name,
     }
 
@@ -123,33 +115,10 @@ mod tests {
     /// `app.current_tenant` policy.
     #[sqlx::test(migrations = "../../migrations")]
     async fn rls_blocks_cross_tenant_access_under_restricted_role(pool: PgPool) {
-        async fn seed_tenant(pool: &PgPool, name: &str) -> Uuid {
-            let (sql, values) = Query::insert()
-                .into_table((Alias::new("identity"), Tenants::Table))
-                .columns([Tenants::Name])
-                .values_panic([name.into()])
-                .returning(Query::returning().columns([Tenants::Id]))
-                .build_sqlx(PostgresQueryBuilder);
-            let (id,): (Uuid,) = sqlx::query_as_with(&sql, values)
-                .fetch_one(pool)
-                .await
-                .unwrap();
-            id
-        }
-
-        async fn seed_workspace(pool: &PgPool, tenant_id: Uuid, name: &str) {
-            let (sql, values) = Query::insert()
-                .into_table((Alias::new("identity"), Workspaces::Table))
-                .columns([Workspaces::TenantId, Workspaces::Name])
-                .values_panic([tenant_id.into(), name.into()])
-                .build_sqlx(PostgresQueryBuilder);
-            sqlx::query_with(&sql, values).execute(pool).await.unwrap();
-        }
-
-        let tenant_a = seed_tenant(&pool, "tenant-a").await;
-        let tenant_b = seed_tenant(&pool, "tenant-b").await;
-        seed_workspace(&pool, tenant_a, "workspace-a").await;
-        seed_workspace(&pool, tenant_b, "workspace-b").await;
+        let tenant_a = test_support::seed_tenant(&pool, "tenant-a").await;
+        let tenant_b = test_support::seed_tenant(&pool, "tenant-b").await;
+        test_support::seed_workspace(&pool, tenant_a, "workspace-a").await;
+        test_support::seed_workspace(&pool, tenant_b, "workspace-b").await;
 
         let mut conn = pool.acquire().await.unwrap();
         // Same session/connection-control statements as `TenantDb::connect`/

@@ -2,6 +2,8 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use sea_query::{Alias, Asterisk, Func, Iden, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -11,6 +13,11 @@ use yorishiro_core::tenancy::{self, MembershipRole};
 
 use crate::error::ApiError;
 use crate::state::AppState;
+
+#[derive(Iden)]
+enum Tenants {
+    Table,
+}
 
 /// Whether the community-edition first-run setup wizard is enabled at all. Gated on
 /// `YORISHIRO_MAX_TENANTS` resolving to an actual cap (`yorishiro-server` defaults this to `1`;
@@ -23,7 +30,11 @@ fn wizard_enabled() -> bool {
 }
 
 async fn tenant_count(pool: &sqlx::PgPool) -> Result<i64, YorishiroError> {
-    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM identity.tenants")
+    let (sql, values) = Query::select()
+        .expr(Func::count(sea_query::Expr::col(Asterisk)))
+        .from((Alias::new("identity"), Tenants::Table))
+        .build_sqlx(PostgresQueryBuilder);
+    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
         .fetch_one(pool)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))?;

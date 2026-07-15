@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sea_query::extension::postgres::PgExpr;
-use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::{Alias, Asterisk, Expr, Func, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::Value;
@@ -25,6 +25,13 @@ enum Entities {
     UpdatedAt,
     CreatedBy,
     UpdatedBy,
+}
+
+#[derive(Iden)]
+enum Workspaces {
+    Table,
+    Id,
+    MaxEntities,
 }
 
 /// A row in the `entities` table. `embedding` is managed separately by the
@@ -146,24 +153,30 @@ async fn check_entity_quota(
     conn: &mut PgConnection,
     workspace_id: Uuid,
 ) -> Result<(), YorishiroError> {
-    let max_entities: Option<i32> =
-        sqlx::query_scalar("SELECT max_entities FROM identity.workspaces WHERE id = $1")
-            .bind(workspace_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|err| YorishiroError::Internal(err.into()))?
-            .flatten();
+    let (sql, values) = Query::select()
+        .column(Workspaces::MaxEntities)
+        .from((Alias::new("identity"), Workspaces::Table))
+        .and_where(Expr::col(Workspaces::Id).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let max_entities: Option<i32> = sqlx::query_scalar_with(&sql, values)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .flatten();
 
     let Some(max) = max_entities else {
         return Ok(());
     };
 
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT count(*) FROM content.entities WHERE workspace_id = $1")
-            .bind(workspace_id)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .expr(Func::count(Expr::col(Asterisk)))
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     if count >= i64::from(max) {
         Err(YorishiroError::Conflict {
@@ -382,15 +395,28 @@ pub async fn export_all(
     conn: &mut PgConnection,
     workspace_id: Uuid,
 ) -> Result<Vec<EntityRecord>, YorishiroError> {
-    sqlx::query_as::<_, EntityRecord>(
-        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, \
-         updated_at, created_by, updated_by \
-         FROM content.entities WHERE workspace_id = $1 ORDER BY created_at",
-    )
-    .bind(workspace_id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns([
+            Entities::Id,
+            Entities::WorkspaceId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
+        ])
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .order_by(Entities::CreatedAt, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, EntityRecord, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 #[cfg(test)]
@@ -442,21 +468,7 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        (tenant_id, workspace_id)
+        crate::test_support::seed_tenant_and_workspace(pool).await
     }
 
     #[sqlx::test(migrations = "../../migrations")]
