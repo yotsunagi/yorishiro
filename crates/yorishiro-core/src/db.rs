@@ -29,6 +29,9 @@ impl TenantDb {
             .max_connections(max_connections)
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
+                    // `SET ROLE` is a session/connection-control statement, not DML -- sea-query
+                    // only builds SELECT/INSERT/UPDATE/DELETE, so this has no query-builder
+                    // form and stays raw SQL.
                     sqlx::query("SET ROLE yorishiro_app")
                         .execute(&mut *conn)
                         .await?;
@@ -37,6 +40,8 @@ impl TenantDb {
             })
             .after_release(|conn, _meta| {
                 Box::pin(async move {
+                    // `RESET` is a session-control statement (not DML) -- same reason as
+                    // `SET ROLE` above for staying raw SQL.
                     sqlx::query("RESET app.current_tenant")
                         .execute(&mut *conn)
                         .await?;
@@ -69,6 +74,9 @@ impl TenantDb {
         workspace_id: Uuid,
     ) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
+        // `set_config(...)` sets a session GUC for RLS to read via `current_setting(...)` --
+        // it's a function call with no table operand, so it has no SELECT/INSERT/UPDATE/DELETE
+        // form for sea-query to build; stays raw SQL like the session commands in `connect`.
         sqlx::query("SELECT set_config('app.current_tenant', $1, false)")
             .bind(tenant_id.to_string())
             .execute(conn.as_mut())
@@ -83,10 +91,26 @@ impl TenantDb {
 
 #[cfg(test)]
 mod tests {
+    use sea_query::{Alias, Iden, PostgresQueryBuilder, Query};
+    use sea_query_binder::SqlxBinder;
     use sqlx::PgPool;
     use sqlx::Row;
 
     use super::*;
+
+    #[derive(Iden)]
+    enum Tenants {
+        Table,
+        Id,
+        Name,
+    }
+
+    #[derive(Iden)]
+    enum Workspaces {
+        Table,
+        TenantId,
+        Name,
+    }
 
     /// The pool `sqlx::test` provides is connected as the admin role (superuser) that ran
     /// the migrations, so `TenantDb::new` alone won't make RLS take effect. This test
@@ -99,32 +123,37 @@ mod tests {
     /// `app.current_tenant` policy.
     #[sqlx::test(migrations = "../../migrations")]
     async fn rls_blocks_cross_tenant_access_under_restricted_role(pool: PgPool) {
-        let (tenant_a,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("tenant-a")
-                .fetch_one(&pool)
+        async fn seed_tenant(pool: &PgPool, name: &str) -> Uuid {
+            let (sql, values) = Query::insert()
+                .into_table((Alias::new("identity"), Tenants::Table))
+                .columns([Tenants::Name])
+                .values_panic([name.into()])
+                .returning(Query::returning().columns([Tenants::Id]))
+                .build_sqlx(PostgresQueryBuilder);
+            let (id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+                .fetch_one(pool)
                 .await
                 .unwrap();
-        let (tenant_b,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("tenant-b")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        sqlx::query("INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2)")
-            .bind(tenant_a)
-            .bind("workspace-a")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2)")
-            .bind(tenant_b)
-            .bind("workspace-b")
-            .execute(&pool)
-            .await
-            .unwrap();
+            id
+        }
+
+        async fn seed_workspace(pool: &PgPool, tenant_id: Uuid, name: &str) {
+            let (sql, values) = Query::insert()
+                .into_table((Alias::new("identity"), Workspaces::Table))
+                .columns([Workspaces::TenantId, Workspaces::Name])
+                .values_panic([tenant_id.into(), name.into()])
+                .build_sqlx(PostgresQueryBuilder);
+            sqlx::query_with(&sql, values).execute(pool).await.unwrap();
+        }
+
+        let tenant_a = seed_tenant(&pool, "tenant-a").await;
+        let tenant_b = seed_tenant(&pool, "tenant-b").await;
+        seed_workspace(&pool, tenant_a, "workspace-a").await;
+        seed_workspace(&pool, tenant_b, "workspace-b").await;
 
         let mut conn = pool.acquire().await.unwrap();
+        // Same session/connection-control statements as `TenantDb::connect`/
+        // `acquire_for_workspace` above -- no query-builder form, stays raw SQL.
         sqlx::query("SET ROLE yorishiro_app")
             .execute(conn.as_mut())
             .await
@@ -135,7 +164,11 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = sqlx::query("SELECT name FROM identity.workspaces")
+        let (sql, values) = Query::select()
+            .column(Workspaces::Name)
+            .from((Alias::new("identity"), Workspaces::Table))
+            .build_sqlx(PostgresQueryBuilder);
+        let rows = sqlx::query_with(&sql, values)
             .fetch_all(conn.as_mut())
             .await
             .unwrap();

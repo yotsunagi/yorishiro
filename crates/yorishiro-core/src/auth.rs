@@ -1,4 +1,6 @@
 use rand::Rng;
+use sea_query::{Alias, Expr, Iden, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
 use sqlx::{PgConnection, PgPool, Postgres};
@@ -6,6 +8,18 @@ use uuid::Uuid;
 
 use crate::db::TenantDb;
 use crate::error::YorishiroError;
+
+#[derive(Iden)]
+enum ApiKeys {
+    Table,
+    Id,
+    WorkspaceId,
+    KeyHash,
+    KeyPrefix,
+    Scope,
+    UserId,
+    LastUsedAt,
+}
 
 const KEY_PREFIX_BYTES: usize = 6;
 const KEY_SECRET_BYTES: usize = 24;
@@ -109,18 +123,29 @@ pub async fn create_api_key(
     let plaintext = format!("{prefix}_{secret}");
     let key_hash = hash_key(&plaintext);
 
-    let (id,): (Uuid,) = sqlx::query_as(
-        "INSERT INTO identity.api_keys (workspace_id, key_hash, key_prefix, scope, user_id) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
-    )
-    .bind(workspace_id)
-    .bind(key_hash)
-    .bind(&prefix)
-    .bind(scope.as_db_str())
-    .bind(user_id)
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), ApiKeys::Table))
+        .columns([
+            ApiKeys::WorkspaceId,
+            ApiKeys::KeyHash,
+            ApiKeys::KeyPrefix,
+            ApiKeys::Scope,
+            ApiKeys::UserId,
+        ])
+        .values_panic([
+            workspace_id.into(),
+            key_hash.into(),
+            prefix.into(),
+            scope.as_db_str().into(),
+            user_id.into(),
+        ])
+        .returning(Query::returning().columns([ApiKeys::Id]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let (id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     Ok(CreatedApiKey {
         id,
@@ -146,6 +171,11 @@ pub async fn authenticate(
 ) -> Result<AuthContext, YorishiroError> {
     let key_hash = hash_key(presented_key);
 
+    // Calling a SECURITY DEFINER function as the FROM-clause row source has no first-class
+    // sea-query form (it isn't a table, so `.from()` can't target it without falling back to
+    // `Expr::cust()` -- which would just hide a raw SQL string inside a builder call rather
+    // than actually building the query). This stays raw SQL for the same reason the session
+    // commands in `db.rs` do.
     let row: Option<(Uuid, Uuid, Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT id, workspace_id, tenant_id, scope, user_id FROM identity.authenticate_api_key($1)",
     )
@@ -194,14 +224,17 @@ pub async fn touch_last_used(
     workspace_id: Uuid,
     api_key_id: Uuid,
 ) -> Result<(), YorishiroError> {
-    sqlx::query(
-        "UPDATE identity.api_keys SET last_used_at = now() WHERE workspace_id = $1 AND id = $2",
-    )
-    .bind(workspace_id)
-    .bind(api_key_id)
-    .execute(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::update()
+        .table((Alias::new("identity"), ApiKeys::Table))
+        .values([(ApiKeys::LastUsedAt, Expr::current_timestamp().into())])
+        .and_where(Expr::col(ApiKeys::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(ApiKeys::Id).eq(api_key_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_with(&sql, values)
+        .execute(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
     Ok(())
 }
 
@@ -269,22 +302,52 @@ mod tests {
     use super::*;
     use crate::db::TenantDb;
 
+    #[derive(Iden)]
+    enum Tenants {
+        Table,
+        Id,
+        Name,
+    }
+
+    #[derive(Iden)]
+    enum Workspaces {
+        Table,
+        Id,
+        TenantId,
+        Name,
+    }
+
+    #[derive(Iden)]
+    enum Users {
+        Table,
+        Id,
+        Email,
+        PasswordHash,
+    }
+
     /// Seeds a tenant plus one workspace under it, returning `(tenant_id, workspace_id)`.
     async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        let (tenant_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO identity.tenants (name) VALUES ($1) RETURNING id")
-                .bind("test-tenant")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let (workspace_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.workspaces (tenant_id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(tenant_id)
-        .bind("test-workspace")
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        let (sql, values) = Query::insert()
+            .into_table((Alias::new("identity"), Tenants::Table))
+            .columns([Tenants::Name])
+            .values_panic(["test-tenant".into()])
+            .returning(Query::returning().columns([Tenants::Id]))
+            .build_sqlx(PostgresQueryBuilder);
+        let (tenant_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        let (sql, values) = Query::insert()
+            .into_table((Alias::new("identity"), Workspaces::Table))
+            .columns([Workspaces::TenantId, Workspaces::Name])
+            .values_panic([tenant_id.into(), "test-workspace".into()])
+            .returning(Query::returning().columns([Workspaces::Id]))
+            .build_sqlx(PostgresQueryBuilder);
+        let (workspace_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(pool)
+            .await
+            .unwrap();
         (tenant_id, workspace_id)
     }
 
@@ -313,14 +376,16 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn resolves_the_attributed_user(pool: PgPool) {
         let (tenant_id, workspace_id) = seed_workspace(&pool).await;
-        let (user_id,): (Uuid,) = sqlx::query_as(
-            "INSERT INTO identity.users (email, password_hash) VALUES ($1, $2) RETURNING id",
-        )
-        .bind("attributed@example.com")
-        .bind("hash")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (sql, values) = Query::insert()
+            .into_table((Alias::new("identity"), Users::Table))
+            .columns([Users::Email, Users::PasswordHash])
+            .values_panic(["attributed@example.com".into(), "hash".into()])
+            .returning(Query::returning().columns([Users::Id]))
+            .build_sqlx(PostgresQueryBuilder);
+        let (user_id,): (Uuid,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
         let db = TenantDb::new(pool.clone());
         let mut conn = db
@@ -419,6 +484,8 @@ mod tests {
             .max_connections(1)
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
+                    // Same session-control statement as `db.rs`'s `TenantDb::connect` --
+                    // no query-builder form, stays raw SQL.
                     sqlx::query("SET ROLE yorishiro_app")
                         .execute(&mut *conn)
                         .await?;
@@ -458,7 +525,11 @@ mod tests {
         assert_eq!(ctx.workspace_id, workspace_id);
         // The returned connection already has its RLS context set, so it can read this
         // workspace's own api_keys row without issue.
-        let count: (i64,) = sqlx::query_as("SELECT count(*) FROM identity.api_keys")
+        let (sql, values) = Query::select()
+            .expr(sea_query::Func::count(Expr::col(sea_query::Asterisk)))
+            .from((Alias::new("identity"), ApiKeys::Table))
+            .build_sqlx(PostgresQueryBuilder);
+        let count: (i64,) = sqlx::query_as_with(&sql, values)
             .fetch_one(&mut *conn)
             .await
             .unwrap();

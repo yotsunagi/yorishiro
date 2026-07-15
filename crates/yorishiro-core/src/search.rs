@@ -1,4 +1,7 @@
 use chrono::{DateTime, Utc};
+use sea_query::extension::postgres::{PgBinOper, PgExpr};
+use sea_query::{Alias, BinOper, Expr, Func, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgConnection;
@@ -8,6 +11,22 @@ use uuid::Uuid;
 use crate::embedding::EmbeddingProvider;
 use crate::entities::EntityRecord;
 use crate::error::YorishiroError;
+
+#[derive(Iden)]
+enum Entities {
+    Table,
+    Id,
+    WorkspaceId,
+    SchemaId,
+    SchemaVersion,
+    EntityType,
+    Data,
+    Embedding,
+    CreatedAt,
+    UpdatedAt,
+    CreatedBy,
+    UpdatedBy,
+}
 
 const DEFAULT_SEARCH_LIMIT: i64 = 10;
 
@@ -99,27 +118,57 @@ pub async fn search_by_vector(
 ) -> Result<Vec<SearchHit>, YorishiroError> {
     let limit = query.limit.clamp(1, 200);
 
-    let rows = sqlx::query_as::<_, SearchRow>(
-        "SELECT id, workspace_id, schema_id, schema_version, entity_type, data, created_at, updated_at, \
-                created_by, updated_by, \
-                embedding <=> $1 AS distance \
-         FROM content.entities \
-         WHERE workspace_id = $2 \
-           AND ($3::text IS NULL OR entity_type = $3) \
-           AND ($4::jsonb IS NULL OR data @> $4) \
-           AND (embedding IS NOT NULL OR data::text % $5) \
-         ORDER BY (embedding IS NULL), embedding <=> $1, similarity(data::text, $5) DESC \
-         LIMIT $6",
-    )
-    .bind(pgvector::Vector::from(vector))
-    .bind(workspace_id)
-    .bind(query.entity_type)
-    .bind(query.filter)
-    .bind(query_text)
-    .bind(limit)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let distance = Expr::col(Entities::Embedding).binary(
+        BinOper::PgOperator(PgBinOper::CosineDistance),
+        Expr::val(pgvector::Vector::from(vector)),
+    );
+    let data_as_text = Expr::col(Entities::Data).cast_as(Alias::new("text"));
+    let similarity = Func::cust(Alias::new("similarity"))
+        .args([data_as_text.clone(), Expr::val(query_text).into()]);
+
+    let mut select = Query::select();
+    select
+        .columns([
+            Entities::Id,
+            Entities::WorkspaceId,
+            Entities::SchemaId,
+            Entities::SchemaVersion,
+            Entities::EntityType,
+            Entities::Data,
+            Entities::CreatedAt,
+            Entities::UpdatedAt,
+            Entities::CreatedBy,
+            Entities::UpdatedBy,
+        ])
+        .expr_as(distance.clone(), Alias::new("distance"))
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .and_where(
+            Expr::col(Entities::Embedding)
+                .is_not_null()
+                .or(data_as_text.binary(
+                    BinOper::PgOperator(PgBinOper::Similarity),
+                    Expr::val(query_text),
+                )),
+        )
+        .order_by_expr(Expr::col(Entities::Embedding).is_null(), Order::Asc)
+        .order_by_expr(distance, Order::Asc)
+        .order_by_expr(similarity.into(), Order::Desc)
+        .limit(limit as u64);
+
+    if let Some(entity_type) = query.entity_type {
+        select.and_where(Expr::col(Entities::EntityType).eq(entity_type));
+    }
+    if let Some(filter) = query.filter {
+        select.and_where(Expr::col(Entities::Data).contains(Expr::val(filter)));
+    }
+
+    let (sql, values) = select.build_sqlx(PostgresQueryBuilder);
+
+    let rows = sqlx::query_as_with::<_, SearchRow, _>(&sql, values)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     Ok(rows.into_iter().map(SearchRow::into_hit).collect())
 }

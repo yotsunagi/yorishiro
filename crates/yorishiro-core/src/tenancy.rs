@@ -9,7 +9,9 @@ use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
-use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::{
+    Alias, Asterisk, Expr, Func, Iden, OnConflict, Order, PostgresQueryBuilder, Query,
+};
 use sea_query_binder::SqlxBinder;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,6 +20,17 @@ use uuid::Uuid;
 
 use crate::auth::ApiKeyScope;
 use crate::error::YorishiroError;
+
+#[derive(Iden)]
+enum Tenants {
+    Table,
+    Id,
+    Name,
+    Plan,
+    MaxWorkspaces,
+    StripeCustomerId,
+    CreatedAt,
+}
 
 #[derive(Iden)]
 enum Workspaces {
@@ -30,10 +43,35 @@ enum Workspaces {
 }
 
 #[derive(Iden)]
+enum Users {
+    Table,
+    Id,
+    Email,
+    PasswordHash,
+    DisplayName,
+    CreatedAt,
+}
+
+#[derive(Iden)]
 enum TenantMemberships {
     Table,
     TenantId,
     UserId,
+    Role,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum Invites {
+    Table,
+    Id,
+    TenantId,
+    Email,
+    Role,
+    TokenHash,
+    ExpiresAt,
+    UsedAt,
+    CreatedAt,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -163,7 +201,11 @@ async fn create_tenant_with_cap(
     max_tenants: Option<i32>,
 ) -> Result<TenantRecord, YorishiroError> {
     if let Some(max) = max_tenants {
-        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM identity.tenants")
+        let (sql, values) = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from((Alias::new("identity"), Tenants::Table))
+            .build_sqlx(PostgresQueryBuilder);
+        let (count,): (i64,) = sqlx::query_as_with(&sql, values)
             .fetch_one(pool)
             .await
             .map_err(|err| YorishiroError::Internal(err.into()))?;
@@ -177,39 +219,64 @@ async fn create_tenant_with_cap(
         }
     }
 
-    sqlx::query_as::<_, TenantRecord>(
-        "INSERT INTO identity.tenants (name, max_workspaces) VALUES ($1, $2) \
-         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
-    )
-    .bind(name)
-    .bind(max_workspaces)
-    .fetch_one(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), Tenants::Table))
+        .columns([Tenants::Name, Tenants::MaxWorkspaces])
+        .values_panic([name.into(), max_workspaces.into()])
+        .returning(Query::returning().columns([
+            Tenants::Id,
+            Tenants::Name,
+            Tenants::Plan,
+            Tenants::MaxWorkspaces,
+            Tenants::StripeCustomerId,
+            Tenants::CreatedAt,
+        ]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+fn tenant_columns() -> [Tenants; 6] {
+    [
+        Tenants::Id,
+        Tenants::Name,
+        Tenants::Plan,
+        Tenants::MaxWorkspaces,
+        Tenants::StripeCustomerId,
+        Tenants::CreatedAt,
+    ]
 }
 
 pub async fn get_tenant(pool: &PgPool, tenant_id: Uuid) -> Result<TenantRecord, YorishiroError> {
-    sqlx::query_as::<_, TenantRecord>(
-        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
-         FROM identity.tenants WHERE id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("tenant '{tenant_id}' was not found"),
-    })
+    let (sql, values) = Query::select()
+        .columns(tenant_columns())
+        .from((Alias::new("identity"), Tenants::Table))
+        .and_where(Expr::col(Tenants::Id).eq(tenant_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("tenant '{tenant_id}' was not found"),
+        })
 }
 
 pub async fn list_tenants(pool: &PgPool) -> Result<Vec<TenantRecord>, YorishiroError> {
-    sqlx::query_as::<_, TenantRecord>(
-        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
-         FROM identity.tenants ORDER BY created_at",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns(tenant_columns())
+        .from((Alias::new("identity"), Tenants::Table))
+        .order_by(Tenants::CreatedAt, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 /// Updates a tenant's billing plan and `max_workspaces` cap together, since the two always
@@ -222,19 +289,23 @@ pub async fn set_tenant_plan(
     plan: &str,
     max_workspaces: Option<i32>,
 ) -> Result<TenantRecord, YorishiroError> {
-    sqlx::query_as::<_, TenantRecord>(
-        "UPDATE identity.tenants SET plan = $2, max_workspaces = $3 WHERE id = $1 \
-         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
-    )
-    .bind(tenant_id)
-    .bind(plan)
-    .bind(max_workspaces)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("tenant '{tenant_id}' was not found"),
-    })
+    let (sql, values) = Query::update()
+        .table((Alias::new("identity"), Tenants::Table))
+        .values([
+            (Tenants::Plan, plan.into()),
+            (Tenants::MaxWorkspaces, max_workspaces.into()),
+        ])
+        .and_where(Expr::col(Tenants::Id).eq(tenant_id))
+        .returning(Query::returning().columns(tenant_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("tenant '{tenant_id}' was not found"),
+        })
 }
 
 /// Records the Stripe customer id created for a tenant at checkout time, so later webhook
@@ -245,32 +316,36 @@ pub async fn link_stripe_customer(
     tenant_id: Uuid,
     stripe_customer_id: &str,
 ) -> Result<TenantRecord, YorishiroError> {
-    sqlx::query_as::<_, TenantRecord>(
-        "UPDATE identity.tenants SET stripe_customer_id = $2 WHERE id = $1 \
-         RETURNING id, name, plan, max_workspaces, stripe_customer_id, created_at",
-    )
-    .bind(tenant_id)
-    .bind(stripe_customer_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("tenant '{tenant_id}' was not found"),
-    })
+    let (sql, values) = Query::update()
+        .table((Alias::new("identity"), Tenants::Table))
+        .values([(Tenants::StripeCustomerId, stripe_customer_id.into())])
+        .and_where(Expr::col(Tenants::Id).eq(tenant_id))
+        .returning(Query::returning().columns(tenant_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("tenant '{tenant_id}' was not found"),
+        })
 }
 
 pub async fn get_tenant_by_stripe_customer(
     pool: &PgPool,
     stripe_customer_id: &str,
 ) -> Result<Option<TenantRecord>, YorishiroError> {
-    sqlx::query_as::<_, TenantRecord>(
-        "SELECT id, name, plan, max_workspaces, stripe_customer_id, created_at \
-         FROM identity.tenants WHERE stripe_customer_id = $1",
-    )
-    .bind(stripe_customer_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns(tenant_columns())
+        .from((Alias::new("identity"), Tenants::Table))
+        .and_where(Expr::col(Tenants::StripeCustomerId).eq(stripe_customer_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, TenantRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 /// Creates a workspace under `tenant_id`, enforcing the tenant's `max_workspaces` cap. `NULL`
@@ -285,12 +360,15 @@ pub async fn create_workspace(
     let tenant = get_tenant(pool, tenant_id).await?;
 
     if let Some(max) = tenant.max_workspaces {
-        let (count,): (i64,) =
-            sqlx::query_as("SELECT count(*) FROM identity.workspaces WHERE tenant_id = $1")
-                .bind(tenant_id)
-                .fetch_one(pool)
-                .await
-                .map_err(|err| YorishiroError::Internal(err.into()))?;
+        let (sql, values) = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from((Alias::new("identity"), Workspaces::Table))
+            .and_where(Expr::col(Workspaces::TenantId).eq(tenant_id))
+            .build_sqlx(PostgresQueryBuilder);
+        let (count,): (i64,) = sqlx::query_as_with(&sql, values)
+            .fetch_one(pool)
+            .await
+            .map_err(|err| YorishiroError::Internal(err.into()))?;
         if count >= i64::from(max) {
             return Err(YorishiroError::Conflict {
                 message: format!(
@@ -301,30 +379,48 @@ pub async fn create_workspace(
         }
     }
 
-    sqlx::query_as::<_, WorkspaceRecord>(
-        "INSERT INTO identity.workspaces (tenant_id, name, max_entities) VALUES ($1, $2, $3) \
-         RETURNING id, tenant_id, name, max_entities, created_at",
-    )
-    .bind(tenant_id)
-    .bind(name)
-    .bind(max_entities)
-    .fetch_one(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), Workspaces::Table))
+        .columns([
+            Workspaces::TenantId,
+            Workspaces::Name,
+            Workspaces::MaxEntities,
+        ])
+        .values_panic([tenant_id.into(), name.into(), max_entities.into()])
+        .returning(Query::returning().columns(workspace_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, WorkspaceRecord, _>(&sql, values)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+fn workspace_columns() -> [Workspaces; 5] {
+    [
+        Workspaces::Id,
+        Workspaces::TenantId,
+        Workspaces::Name,
+        Workspaces::MaxEntities,
+        Workspaces::CreatedAt,
+    ]
 }
 
 pub async fn list_workspaces(
     pool: &PgPool,
     tenant_id: Uuid,
 ) -> Result<Vec<WorkspaceRecord>, YorishiroError> {
-    sqlx::query_as::<_, WorkspaceRecord>(
-        "SELECT id, tenant_id, name, max_entities, created_at FROM identity.workspaces \
-         WHERE tenant_id = $1 ORDER BY created_at",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns(workspace_columns())
+        .from((Alias::new("identity"), Workspaces::Table))
+        .and_where(Expr::col(Workspaces::TenantId).eq(tenant_id))
+        .order_by(Workspaces::CreatedAt, Order::Asc)
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, WorkspaceRecord, _>(&sql, values)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 /// Every workspace `user_id` can log into, across all of their tenant memberships -- used to
@@ -362,17 +458,19 @@ pub async fn get_workspace(
     pool: &PgPool,
     workspace_id: Uuid,
 ) -> Result<WorkspaceRecord, YorishiroError> {
-    sqlx::query_as::<_, WorkspaceRecord>(
-        "SELECT id, tenant_id, name, max_entities, created_at FROM identity.workspaces \
-         WHERE id = $1",
-    )
-    .bind(workspace_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?
-    .ok_or_else(|| YorishiroError::NotFound {
-        message: format!("workspace '{workspace_id}' was not found"),
-    })
+    let (sql, values) = Query::select()
+        .columns(workspace_columns())
+        .from((Alias::new("identity"), Workspaces::Table))
+        .and_where(Expr::col(Workspaces::Id).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, WorkspaceRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?
+        .ok_or_else(|| YorishiroError::NotFound {
+            message: format!("workspace '{workspace_id}' was not found"),
+        })
 }
 
 fn hash_password(password: &str) -> Result<String, YorishiroError> {
@@ -401,26 +499,32 @@ pub async fn create_user(
     display_name: Option<&str>,
 ) -> Result<UserRecord, YorishiroError> {
     let password_hash = hash_password(password)?;
-    sqlx::query_as::<_, UserRecord>(
-        "INSERT INTO identity.users (email, password_hash, display_name) VALUES ($1, $2, $3) \
-         RETURNING id, email, display_name, created_at",
-    )
-    .bind(email)
-    .bind(password_hash)
-    .bind(display_name)
-    .fetch_one(pool)
-    .await
-    .map_err(|err| {
-        if let sqlx::Error::Database(db_err) = &err
-            && db_err.is_unique_violation()
-        {
-            YorishiroError::Conflict {
-                message: format!("a user with email '{email}' already exists"),
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), Users::Table))
+        .columns([Users::Email, Users::PasswordHash, Users::DisplayName])
+        .values_panic([email.into(), password_hash.into(), display_name.into()])
+        .returning(Query::returning().columns([
+            Users::Id,
+            Users::Email,
+            Users::DisplayName,
+            Users::CreatedAt,
+        ]))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, UserRecord, _>(&sql, values)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| {
+            if let sqlx::Error::Database(db_err) = &err
+                && db_err.is_unique_violation()
+            {
+                YorishiroError::Conflict {
+                    message: format!("a user with email '{email}' already exists"),
+                }
+            } else {
+                YorishiroError::Internal(err.into())
             }
-        } else {
-            YorishiroError::Internal(err.into())
-        }
-    })
+        })
 }
 
 /// Looks up an existing user by email, without touching their password hash. Used by member
@@ -430,13 +534,21 @@ pub async fn get_user_by_email(
     pool: &PgPool,
     email: &str,
 ) -> Result<Option<UserRecord>, YorishiroError> {
-    sqlx::query_as::<_, UserRecord>(
-        "SELECT id, email, display_name, created_at FROM identity.users WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))
+    let (sql, values) = Query::select()
+        .columns([
+            Users::Id,
+            Users::Email,
+            Users::DisplayName,
+            Users::CreatedAt,
+        ])
+        .from((Alias::new("identity"), Users::Table))
+        .and_where(Expr::col(Users::Email).eq(email))
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_as_with::<_, UserRecord, _>(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))
 }
 
 /// Verifies an email/password pair against the stored argon2 hash, returning the matching
@@ -455,14 +567,22 @@ pub async fn verify_login(
         password_hash: String,
     }
 
-    let row: Option<UserWithHash> = sqlx::query_as(
-        "SELECT id, email, display_name, created_at, password_hash FROM identity.users \
-         WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .columns([
+            Users::Id,
+            Users::Email,
+            Users::DisplayName,
+            Users::CreatedAt,
+            Users::PasswordHash,
+        ])
+        .from((Alias::new("identity"), Users::Table))
+        .and_where(Expr::col(Users::Email).eq(email))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let row: Option<UserWithHash> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     let Some(row) = row else {
         return Ok(None);
@@ -488,16 +608,26 @@ pub async fn add_member(
     role: MembershipRole,
 ) -> Result<(), YorishiroError> {
     get_tenant(pool, tenant_id).await?;
-    sqlx::query(
-        "INSERT INTO identity.tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) \
-         ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(tenant_id)
-    .bind(user_id)
-    .bind(role.as_db_str())
-    .execute(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), TenantMemberships::Table))
+        .columns([
+            TenantMemberships::TenantId,
+            TenantMemberships::UserId,
+            TenantMemberships::Role,
+        ])
+        .values_panic([tenant_id.into(), user_id.into(), role.as_db_str().into()])
+        .on_conflict(
+            OnConflict::columns([TenantMemberships::TenantId, TenantMemberships::UserId])
+                .update_column(TenantMemberships::Role)
+                .to_owned(),
+        )
+        .build_sqlx(PostgresQueryBuilder);
+
+    sqlx::query_with(&sql, values)
+        .execute(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
     Ok(())
 }
 
@@ -507,14 +637,17 @@ pub async fn get_membership_role(
     tenant_id: Uuid,
     user_id: Uuid,
 ) -> Result<Option<MembershipRole>, YorishiroError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT role FROM identity.tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
-    )
-    .bind(tenant_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .column(TenantMemberships::Role)
+        .from((Alias::new("identity"), TenantMemberships::Table))
+        .and_where(Expr::col(TenantMemberships::TenantId).eq(tenant_id))
+        .and_where(Expr::col(TenantMemberships::UserId).eq(user_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let row: Option<(String,)> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     row.map(|(role,)| {
         MembershipRole::from_db_str(&role).ok_or_else(|| {
@@ -538,16 +671,30 @@ pub async fn list_members(
         role: String,
     }
 
-    let rows: Vec<MembershipRow> = sqlx::query_as(
-        "SELECT u.id AS user_id, u.email, u.display_name, m.role \
-         FROM identity.tenant_memberships m \
-         JOIN identity.users u ON u.id = m.user_id \
-         WHERE m.tenant_id = $1 ORDER BY m.created_at",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::select()
+        .expr_as(Expr::col((Users::Table, Users::Id)), Alias::new("user_id"))
+        .columns([
+            (Users::Table, Users::Email),
+            (Users::Table, Users::DisplayName),
+        ])
+        .column((TenantMemberships::Table, TenantMemberships::Role))
+        .from((Alias::new("identity"), TenantMemberships::Table))
+        .inner_join(
+            (Alias::new("identity"), Users::Table),
+            Expr::col((Users::Table, Users::Id))
+                .equals((TenantMemberships::Table, TenantMemberships::UserId)),
+        )
+        .and_where(Expr::col((TenantMemberships::Table, TenantMemberships::TenantId)).eq(tenant_id))
+        .order_by(
+            (TenantMemberships::Table, TenantMemberships::CreatedAt),
+            Order::Asc,
+        )
+        .build_sqlx(PostgresQueryBuilder);
+
+    let rows: Vec<MembershipRow> = sqlx::query_as_with(&sql, values)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     rows.into_iter()
         .map(|row| {
@@ -599,6 +746,17 @@ struct InviteRow {
     created_at: DateTime<Utc>,
 }
 
+fn invite_columns() -> [Invites; 6] {
+    [
+        Invites::Id,
+        Invites::TenantId,
+        Invites::Email,
+        Invites::Role,
+        Invites::ExpiresAt,
+        Invites::CreatedAt,
+    ]
+}
+
 impl InviteRow {
     fn into_record(self) -> Result<InviteRecord, YorishiroError> {
         let role = MembershipRole::from_db_str(&self.role).ok_or_else(|| {
@@ -637,19 +795,29 @@ pub async fn create_invite(
     let token_hash = hash_invite_token(&token);
     let expires_at = Utc::now() + ttl;
 
-    let row: InviteRow = sqlx::query_as(
-        "INSERT INTO identity.invites (tenant_id, email, role, token_hash, expires_at) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, tenant_id, email, role, expires_at, created_at",
-    )
-    .bind(tenant_id)
-    .bind(email)
-    .bind(role.as_db_str())
-    .bind(token_hash)
-    .bind(expires_at)
-    .fetch_one(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::insert()
+        .into_table((Alias::new("identity"), Invites::Table))
+        .columns([
+            Invites::TenantId,
+            Invites::Email,
+            Invites::Role,
+            Invites::TokenHash,
+            Invites::ExpiresAt,
+        ])
+        .values_panic([
+            tenant_id.into(),
+            email.into(),
+            role.as_db_str().into(),
+            token_hash.into(),
+            expires_at.into(),
+        ])
+        .returning(Query::returning().columns(invite_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let row: InviteRow = sqlx::query_as_with(&sql, values)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     Ok((row.into_record()?, token))
 }
@@ -664,15 +832,19 @@ pub async fn redeem_invite(
 ) -> Result<Option<InviteRecord>, YorishiroError> {
     let token_hash = hash_invite_token(raw_token);
 
-    let row: Option<InviteRow> = sqlx::query_as(
-        "UPDATE identity.invites SET used_at = now() \
-         WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() \
-         RETURNING id, tenant_id, email, role, expires_at, created_at",
-    )
-    .bind(token_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let (sql, values) = Query::update()
+        .table((Alias::new("identity"), Invites::Table))
+        .values([(Invites::UsedAt, Expr::current_timestamp().into())])
+        .and_where(Expr::col(Invites::TokenHash).eq(token_hash))
+        .and_where(Expr::col(Invites::UsedAt).is_null())
+        .and_where(Expr::col(Invites::ExpiresAt).gt(Expr::current_timestamp()))
+        .returning(Query::returning().columns(invite_columns()))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let row: Option<InviteRow> = sqlx::query_as_with(&sql, values)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
 
     row.map(InviteRow::into_record).transpose()
 }

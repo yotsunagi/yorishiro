@@ -2964,6 +2964,7 @@ checksum = "8a5d1c518eaf5eda38e5773f902b26ab6d5e9e9e2bb2349ca6c64cf96f80448c"
 dependencies = [
  "chrono",
  "inherent",
+ "pgvector",
  "sea-query-derive",
  "serde_json",
  "uuid",
@@ -2976,6 +2977,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0019f47430f7995af63deda77e238c17323359af241233ec768aba1faea7608"
 dependencies = [
  "chrono",
+ "pgvector",
  "sea-query",
  "serde_json",
  "sqlx",
