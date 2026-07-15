@@ -6,12 +6,15 @@ mod relations;
 mod schemas;
 mod search;
 mod setup;
+mod workspaces;
 
 use axum::Router;
 use axum::routing::{get, post};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
+use uuid::Uuid;
 use yorishiro_core::YorishiroError;
+use yorishiro_core::repositories::tenancy::{self, MembershipRole};
 
 use crate::state::AppState;
 
@@ -28,6 +31,26 @@ pub(crate) fn parse_filter_param(
         details: vec![],
         hint: format!("filter must be a JSON object, e.g. {{\"status\":\"active\"}}: {err}"),
     })
+}
+
+/// Shared by `members` and `workspaces`: both are tenant-wide concerns, independent of (and
+/// stricter than) the presented API key's own scope -- a Member-role key can carry `write`
+/// scope for content operations while still having no business adding members or managing
+/// workspaces. This mirrors `yorishiro-hosted`'s `authenticate_tenant_admin`.
+pub(crate) async fn require_tenant_admin(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Option<Uuid>,
+) -> Result<(), YorishiroError> {
+    let user_id = user_id.ok_or(YorishiroError::Unauthenticated)?;
+    tenancy::get_membership_role(&state.identity_pool, tenant_id, user_id)
+        .await?
+        .filter(|role| matches!(role, MembershipRole::Owner | MembershipRole::Admin))
+        .ok_or_else(|| YorishiroError::ScopeInsufficient {
+            message: "this operation is restricted to tenant owners/admins".into(),
+            hint: "ask a tenant owner to grant you the admin role".into(),
+        })?;
+    Ok(())
 }
 
 /// Registers a single scheme named `bearer_auth` for sending the API key as a
@@ -78,6 +101,10 @@ impl Modify for SecurityAddon {
         schemas::list_templates,
         search::search_entities,
         export::export_jsonl,
+        workspaces::list_workspaces,
+        workspaces::create_workspace,
+        workspaces::get_workspace,
+        workspaces::delete_workspace,
     ),
     components(schemas(
         identity::SignupRequest,
@@ -91,18 +118,22 @@ impl Modify for SecurityAddon {
         members::AddMemberRequest,
         yorishiro_core::repositories::tenancy::MembershipRole,
         yorishiro_core::repositories::tenancy::MembershipRecord,
+        yorishiro_core::repositories::tenancy::WorkspaceRecord,
         yorishiro_core::services::auth::ApiKeyScope,
         entities::CreateEntityRequest,
         entities::UpdateEntityRequest,
         relations::CreateRelationRequest,
         schemas::CreateSchemaResponse,
         schemas::CreateSchemaRequest,
+        workspaces::CreateWorkspaceRequest,
+        workspaces::WorkspaceDetail,
     )),
     modifiers(&SecurityAddon),
     security(("bearer_auth" = [])),
     tags(
         (name = "auth", description = "Signup and login (no bearer token required)"),
         (name = "members", description = "Tenant member management (owner/admin only)"),
+        (name = "workspaces", description = "Workspace management (listing is open to any tenant member; create/delete are owner/admin only)"),
         (name = "entities", description = "Entity operations"),
         (name = "relations", description = "Relation operations"),
         (name = "schemas", description = "Meta-schema operations"),
@@ -140,6 +171,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/members",
             post(members::add_member).get(members::list_members),
+        )
+        .route(
+            "/api/workspaces",
+            post(workspaces::create_workspace).get(workspaces::list_workspaces),
+        )
+        .route(
+            "/api/workspaces/{id}",
+            get(workspaces::get_workspace).delete(workspaces::delete_workspace),
         )
         .route(
             "/api/entities",

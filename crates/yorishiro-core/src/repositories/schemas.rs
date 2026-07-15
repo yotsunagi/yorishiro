@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::{Alias, Asterisk, Expr, Func, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use serde_json::Value;
 use sqlx::{Connection, PgConnection};
@@ -73,6 +73,27 @@ pub async fn list(
         .fetch_all(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Counts a workspace's currently *active* schemas -- one row per distinct schema name, since
+/// `create_schema` archives the previous version before activating a new one. For
+/// workspace-detail summaries, this is a more meaningful "how many schemas does this workspace
+/// define" figure than counting every archived version too.
+pub async fn count_active(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+) -> Result<i64, YorishiroError> {
+    let (sql, values) = Query::select()
+        .expr(Func::count(Expr::col(Asterisk)))
+        .from((Alias::new("content"), Schemas::Table))
+        .and_where(Expr::col(Schemas::WorkspaceId).eq(workspace_id))
+        .and_where(Expr::col(Schemas::Status).eq("active"))
+        .build_sqlx(PostgresQueryBuilder);
+    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    Ok(count)
 }
 
 fn schema_columns() -> [Schemas; 7] {

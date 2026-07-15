@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sea_query::{Alias, Expr, Iden, Order, PostgresQueryBuilder, Query};
+use sea_query::{Alias, Asterisk, Expr, Func, Iden, Order, PostgresQueryBuilder, Query};
 use sea_query_binder::SqlxBinder;
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -248,6 +248,20 @@ pub async fn export_all(
         .fetch_all(&mut *conn)
         .await
         .map_err(|err| YorishiroError::Internal(err.into()))
+}
+
+/// Counts how many relations a workspace holds, for workspace-detail summaries.
+pub async fn count(conn: &mut PgConnection, workspace_id: Uuid) -> Result<i64, YorishiroError> {
+    let (sql, values) = Query::select()
+        .expr(Func::count(Expr::col(Asterisk)))
+        .from((Alias::new("content"), Relations::Table))
+        .and_where(Expr::col(Relations::WorkspaceId).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    Ok(count)
 }
 
 #[derive(sqlx::FromRow)]

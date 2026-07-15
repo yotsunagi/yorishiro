@@ -1,10 +1,11 @@
 // Yorishiro admin dashboard -- a deliberately framework-free SPA. Scope is limited to first-run
-// setup, login, usage/billing display, and member management; it is not a general
-// entity/schema/relation browser -- that's what the REST API + Swagger UI (`/docs` on
-// yorishiro-server) are for. Served by both yorishiro-server (via `YSR_WEB_DIR`) and
+// setup, login, usage/billing display, member management, and workspace management (create/
+// list/delete plus a summary detail view -- entity/relation/schema counts, not their content);
+// it is not a general entity/schema/relation browser -- that's what the REST API + Swagger UI
+// (`/docs` on yorishiro-server) are for. Served by both yorishiro-server (via `YSR_WEB_DIR`) and
 // yorishiro-hosted-server -- `/hosted/tenant/overview` and friends only exist on the latter, so
-// on yorishiro-server alone, `#/dashboard` degrades to just showing the API key login just
-// issued (see `renderLoginComplete`) instead of the full dashboard.
+// on yorishiro-server alone, `#/dashboard` degrades to the API key login just issued plus
+// workspace management (see `renderLoginComplete`) instead of the full hosted dashboard.
 
 const SESSION_KEY = "yorishiro_session";
 
@@ -112,6 +113,53 @@ async function addMember(apiKey, { email, role }) {
   return response.json();
 }
 
+async function listWorkspaces(apiKey) {
+  const response = await fetch(`${apiBase()}/api/workspaces`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+  return response.json();
+}
+
+async function createWorkspace(apiKey, { name, maxEntities }) {
+  const response = await fetch(`${apiBase()}/api/workspaces`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    // max_entities is omitted (rather than sent as an empty string) when left blank, so the
+    // server applies its own "unlimited" default instead of failing to parse "" as a number.
+    body: JSON.stringify({ name, max_entities: maxEntities || undefined }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+  return response.json();
+}
+
+async function getWorkspace(apiKey, id) {
+  const response = await fetch(`${apiBase()}/api/workspaces/${id}`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+  return response.json();
+}
+
+async function deleteWorkspace(apiKey, id) {
+  const response = await fetch(`${apiBase()}/api/workspaces/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+}
+
 function renderSetup(errorMessage) {
   const view = el(`
     <div>
@@ -217,20 +265,67 @@ function renderLogin(errorMessage, needsWorkspaceId = false) {
   return view;
 }
 
-function renderLoginComplete(session) {
+function renderWorkspacesTable(workspaces) {
+  if (workspaces.length === 0) {
+    return `<p class="hint">No workspaces yet.</p>`;
+  }
+  const rows = workspaces
+    .map(
+      (ws) => `
+        <tr>
+          <td><a href="#/workspaces/${ws.id}">${ws.name}</a></td>
+          <td>${ws.max_entities ?? "unlimited"}</td>
+          <td>${new Date(ws.created_at).toLocaleString()}</td>
+        </tr>`,
+    )
+    .join("");
+  return `
+    <table>
+      <thead><tr><th>Name</th><th>Max entities</th><th>Created</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// The community edition has no `/hosted/tenant/overview` dashboard, so this is what
+// `renderDashboard` falls back to: the just-issued API key, plus workspace management
+// (create/list/select -- see `renderWorkspaceDetail` for delete) since a self-hosted deployment
+// otherwise has no way to see or manage workspaces beyond the one `/setup` created.
+async function renderLoginComplete(session, createError) {
+  let workspaces;
+  try {
+    workspaces = await listWorkspaces(session.apiKey);
+  } catch (err) {
+    workspaces = [];
+  }
+
   const view = el(`
     <div>
       <div class="top-bar">
         <h1>Signed in</h1>
         <button class="secondary" id="logout-button">Sign out</button>
       </div>
-      <p class="hint">This is the community edition, which has no dashboard here -- use the API key
-      below as a Bearer token against the REST API (see <a href="/docs">/docs</a>) or your MCP
-      client's configuration.</p>
+      <p class="hint">Use the API key below as a Bearer token against the REST API (see
+      <a href="/docs">/docs</a>) or your MCP client's configuration.</p>
       <dl>
         <dt>Email</dt><dd>${session.email}</dd>
       </dl>
       <pre>${session.apiKey}</pre>
+
+      <h2>Workspaces</h2>
+      ${renderWorkspacesTable(workspaces)}
+
+      <h2>Create a workspace</h2>
+      <form id="create-workspace-form">
+        <label>Name
+          <input type="text" name="name" required>
+        </label>
+        <label>Max entities (optional)
+          <input type="number" name="maxEntities" min="1">
+        </label>
+        ${createError ? `<p class="error">${createError}</p>` : ""}
+        <button type="submit">Create workspace</button>
+      </form>
     </div>
   `);
 
@@ -239,7 +334,89 @@ function renderLoginComplete(session) {
     location.hash = "#/login";
   });
 
+  view.querySelector("#create-workspace-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    try {
+      await createWorkspace(session.apiKey, {
+        name: form.get("name"),
+        maxEntities: form.get("maxEntities"),
+      });
+      mount(await renderLoginComplete(session));
+    } catch (err) {
+      mount(await renderLoginComplete(session, err.message));
+    }
+  });
+
   return view;
+}
+
+function renderWorkspaceDetail(detail) {
+  const view = el(`
+    <div>
+      <div class="top-bar">
+        <h1>${detail.name}</h1>
+        <button class="secondary" id="logout-button">Sign out</button>
+      </div>
+      <p><a href="#/dashboard">&larr; Back to workspaces</a></p>
+
+      <div class="stat-grid">
+        <div class="stat"><div class="value">${detail.entity_count}</div><div class="label">entities</div></div>
+        <div class="stat"><div class="value">${detail.relation_count}</div><div class="label">relations</div></div>
+        <div class="stat"><div class="value">${detail.schema_count}</div><div class="label">schemas</div></div>
+      </div>
+
+      <dl>
+        <dt>Workspace ID</dt><dd><code>${detail.id}</code></dd>
+        <dt>Max entities</dt><dd>${detail.max_entities ?? "unlimited"}</dd>
+        <dt>Created</dt><dd>${new Date(detail.created_at).toLocaleString()}</dd>
+      </dl>
+
+      <button class="danger" id="delete-workspace-button">Delete workspace</button>
+      <p class="error" id="delete-error" hidden></p>
+    </div>
+  `);
+
+  view.querySelector("#logout-button").addEventListener("click", () => {
+    clearSession();
+    location.hash = "#/login";
+  });
+
+  view.querySelector("#delete-workspace-button").addEventListener("click", async () => {
+    const confirmed = confirm(
+      `Delete workspace "${detail.name}"? This permanently deletes every entity, relation, and schema in it.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    const session = getSession();
+    try {
+      await deleteWorkspace(session.apiKey, detail.id);
+      location.hash = "#/dashboard";
+    } catch (err) {
+      const errorEl = view.querySelector("#delete-error");
+      errorEl.textContent = err.message;
+      errorEl.hidden = false;
+    }
+  });
+
+  return view;
+}
+
+async function renderWorkspaceDetailRoute(id) {
+  const session = getSession();
+  if (!session) {
+    location.hash = "#/login";
+    return;
+  }
+
+  mount(el(`<p>Loading…</p>`));
+  try {
+    const detail = await getWorkspace(session.apiKey, id);
+    mount(renderWorkspaceDetail(detail));
+  } catch (err) {
+    mount(el(`<p class="error">${err.message}</p><p><a href="#/dashboard">&larr; Back</a></p>`));
+  }
 }
 
 function renderMembersTable(members) {
@@ -338,7 +515,7 @@ async function renderDashboard() {
       // Not a session failure -- this deployment is yorishiro-server (community edition),
       // which has no /hosted/tenant/overview endpoint. The session (and the API key login
       // just issued) is still valid.
-      mount(renderLoginComplete(session));
+      mount(await renderLoginComplete(session));
       return;
     }
     clearSession();
@@ -348,6 +525,13 @@ async function renderDashboard() {
 
 async function router() {
   const hash = location.hash || "#/login";
+
+  const workspaceMatch = hash.match(/^#\/workspaces\/([0-9a-f-]+)$/i);
+  if (workspaceMatch) {
+    renderWorkspaceDetailRoute(workspaceMatch[1]);
+    return;
+  }
+
   if (hash === "#/dashboard") {
     renderDashboard();
     return;

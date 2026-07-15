@@ -74,6 +74,10 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button.danger {
+  background: var(--danger);
+}
+
 .error {
   color: var(--danger);
   font-size: 0.9rem;

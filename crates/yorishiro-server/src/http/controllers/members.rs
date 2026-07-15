@@ -4,33 +4,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 use yorishiro_core::YorishiroError;
 use yorishiro_core::repositories::tenancy::{self, MembershipRecord, MembershipRole};
 
 use crate::error::ApiError;
+use crate::http::controllers::require_tenant_admin;
 use crate::http::middleware::auth::AuthContext;
 use crate::state::AppState;
-
-/// Membership management is a tenant-wide concern, independent of (and stricter than) the
-/// presented API key's own scope -- a Member-role key can carry `write` scope for content
-/// operations while still having no business adding or listing members. This mirrors
-/// `yorishiro-hosted`'s `authenticate_tenant_admin`.
-async fn require_tenant_admin(
-    state: &AppState,
-    tenant_id: Uuid,
-    user_id: Option<Uuid>,
-) -> Result<(), YorishiroError> {
-    let user_id = user_id.ok_or(YorishiroError::Unauthenticated)?;
-    tenancy::get_membership_role(&state.identity_pool, tenant_id, user_id)
-        .await?
-        .filter(|role| matches!(role, MembershipRole::Owner | MembershipRole::Admin))
-        .ok_or_else(|| YorishiroError::ScopeInsufficient {
-            message: "member management is restricted to tenant owners/admins".into(),
-            hint: "ask a tenant owner to grant you the admin role".into(),
-        })?;
-    Ok(())
-}
 
 #[utoipa::path(
     get,

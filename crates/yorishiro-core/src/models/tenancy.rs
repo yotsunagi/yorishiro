@@ -14,7 +14,7 @@ pub struct TenantRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct WorkspaceRecord {
     pub id: Uuid,
     pub tenant_id: Uuid,

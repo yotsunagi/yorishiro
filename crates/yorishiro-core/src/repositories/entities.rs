@@ -121,15 +121,7 @@ async fn check_entity_quota(
         return Ok(());
     };
 
-    let (sql, values) = Query::select()
-        .expr(Func::count(Expr::col(Asterisk)))
-        .from((Alias::new("content"), Entities::Table))
-        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
-        .build_sqlx(PostgresQueryBuilder);
-    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let count = count(conn, workspace_id).await?;
 
     if count >= i64::from(max) {
         Err(YorishiroError::Conflict {
@@ -141,6 +133,21 @@ async fn check_entity_quota(
     } else {
         Ok(())
     }
+}
+
+/// Counts how many entities a workspace holds, for both quota enforcement (`create`, above)
+/// and workspace-detail summaries.
+pub async fn count(conn: &mut PgConnection, workspace_id: Uuid) -> Result<i64, YorishiroError> {
+    let (sql, values) = Query::select()
+        .expr(Func::count(Expr::col(Asterisk)))
+        .from((Alias::new("content"), Entities::Table))
+        .and_where(Expr::col(Entities::WorkspaceId).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+    let (count,): (i64,) = sqlx::query_as_with(&sql, values)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    Ok(count)
 }
 
 /// Creates a new entity: resolves the schema name to its currently active schema, checks

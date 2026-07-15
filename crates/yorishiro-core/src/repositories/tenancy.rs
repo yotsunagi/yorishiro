@@ -395,6 +395,30 @@ pub async fn get_workspace(
         })
 }
 
+/// Deletes a workspace and everything under it. `identity.workspaces`'s foreign keys from
+/// `content.entities`/`content.relations`/`content.schemas`/`identity.api_keys` are all
+/// `ON DELETE CASCADE` (see the initial migration), so this one statement is enough --
+/// callers don't need to delete those rows themselves first.
+pub async fn delete_workspace(pool: &PgPool, workspace_id: Uuid) -> Result<(), YorishiroError> {
+    let (sql, values) = Query::delete()
+        .from_table((Alias::new("identity"), Workspaces::Table))
+        .and_where(Expr::col(Workspaces::Id).eq(workspace_id))
+        .build_sqlx(PostgresQueryBuilder);
+
+    let result = sqlx::query_with(&sql, values)
+        .execute(pool)
+        .await
+        .map_err(|err| YorishiroError::Internal(err.into()))?;
+
+    if result.rows_affected() == 0 {
+        Err(YorishiroError::NotFound {
+            message: format!("workspace '{workspace_id}' was not found"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn hash_password(password: &str) -> Result<String, YorishiroError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
