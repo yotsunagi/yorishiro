@@ -18,11 +18,17 @@ This makes `config.yml` convenient as the base configuration for a deployment, w
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string (required) |
 | `YSR_BIND` | Listen address (default: `0.0.0.0:8080`) |
-| `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access (e.g. so a browser-based dashboard on a different origin can call `/auth/login`/`/api/members`). Cross-origin reads are disabled if unset |
+| `YSR_CORS_ORIGINS` | Comma-separated list of allowed origins for browser access (e.g. so a browser-based dashboard on a different origin can call `/auth/login`/`/api/members`). Cross-origin reads are disabled if unset. In debug builds only, leaving this unset also auto-allows any `http://localhost:*`/`http://127.0.0.1:*` origin (for browser-based dev tools like the MCP Inspector) -- release builds never do this |
 | `YORISHIRO_MAX_TENANTS` | Deployment-wide cap on tenants `admin create-tenant` may create. Defaults to `1` (single-tenant). Set `0` for unlimited, or a higher number for that many. `POST /auth/signup` never creates a tenant (it just redeems an invite), so it's unaffected. Also gates the first-run setup wizard (see [setup.md](setup.md#first-run-setup)), enabled only when the cap isn't `0` |
 | `YSR_WEB_DIR` | The setup/login/workspace-management web UI's static files are compiled into the binary and served at `/` by default. Set this to serve them from a real directory on disk instead (e.g. to iterate on `web/` without rebuilding) |
 | `YSR_AUTH_RATE_LIMIT_MAX` / `YSR_AUTH_RATE_LIMIT_WINDOW_SECS` | Per-client-IP rate limit on `/auth/signup`, `/auth/login`, and `/setup` — the endpoints reachable without a bearer token, and therefore the only ones an unauthenticated caller can brute-force. Defaults: 10 requests per 60 seconds |
 | `RUST_LOG` | Log level (e.g. `info`) |
+
+## Request correlation
+
+Every response carries an `x-request-id` header -- a UUID the server generates if the request didn't already have one, otherwise the caller's own value is echoed back unchanged. The same value tags the tracing span for that request, so any `warn`/`error` line logged while handling it (an authentication rejection, a rate-limit hit, an internal error) carries the same `request_id` field as the access log line for that request. Useful for tying a specific failed request to its server-side log lines when following up on an incident report.
+
+Rejected requests (bad/missing API key, insufficient scope, rate limit exceeded) are logged at `warn` with the caller's IP and the request path, but never the presented credential -- previously these surfaced only as an anonymous 401/403/429 in the access log.
 
 ## Logging
 

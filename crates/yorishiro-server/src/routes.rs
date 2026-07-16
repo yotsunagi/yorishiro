@@ -24,7 +24,6 @@ use crate::state::AppState;
 /// community server) can build this same router and merge its own routes into it, rather than
 /// running two separate processes.
 pub fn build_app(state: AppState, web_dir: Option<String>) -> Router {
-    let cors = build_cors_layer();
     let mcp_service = StreamableHttpService::new(
         {
             let state = state.clone();
@@ -43,7 +42,21 @@ pub fn build_app(state: AppState, web_dir: Option<String>) -> Router {
         .merge(
             SwaggerUi::new("/docs").url("/api-docs/openapi.json", controllers::ApiDoc::openapi()),
         )
-        .layer(cors)
+        .with_state(state);
+
+    apply_observability_layers(router).fallback_service(yorishiro_web::fallback_service(web_dir))
+}
+
+/// Applies the CORS / request-id / access-log stack that every API route in this process needs.
+/// Factored out of `build_app` so a process embedding this server alongside its own routes
+/// (e.g. `yorishiro-hosted-server`) can apply the same stack to its own sub-router *before*
+/// merging it with `build_app`'s -- `axum::Router::merge` doesn't propagate layers from either
+/// side to the other, so each sub-router must carry its own copy of this stack for every route
+/// to get it exactly once. Not applied to `build_app`'s static-asset fallback (added after this
+/// runs), which is deliberately left untraced.
+pub fn apply_observability_layers(router: Router) -> Router {
+    router
+        .layer(build_cors_layer())
         // Copies the resolved `x-request-id` onto the response so a caller or proxy can
         // correlate its request with this server's logs.
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -72,9 +85,6 @@ pub fn build_app(state: AppState, web_dir: Option<String>) -> Router {
         // Generates an `x-request-id` (UUID) when the incoming request lacks one. Added last so
         // it is the outermost layer and runs before the trace span above reads the header.
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-        .with_state(state);
-
-    router.fallback_service(yorishiro_web::fallback_service(web_dir))
 }
 
 fn build_cors_layer() -> CorsLayer {
