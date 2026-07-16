@@ -13,7 +13,7 @@ pub mod logging;
 mod routes;
 mod state;
 
-pub use routes::build_app;
+pub use routes::{apply_observability_layers, build_app};
 pub use state::AppState;
 
 /// `YORISHIRO_MAX_TENANTS` is process-wide state read by both `http::controllers::setup` and login's
