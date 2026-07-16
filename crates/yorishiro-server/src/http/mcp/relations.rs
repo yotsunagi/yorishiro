@@ -12,7 +12,7 @@ use uuid::Uuid;
 use yorishiro_core::repositories::relations;
 use yorishiro_core::services::auth::ApiKeyScope;
 
-use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
+use super::{YorishiroMcpServer, authorized, err_to_tool_result, ok_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateRelationArgs {
@@ -56,10 +56,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<CreateRelationArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Write).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Write);
 
         let input = relations::CreateRelationInput {
             source_id: args.source_id,
@@ -81,10 +78,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<GetRelationArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         match relations::get(authorized.conn(), workspace_id, args.id).await {
@@ -99,10 +93,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<DeleteRelationArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Write).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Write);
 
         let workspace_id = authorized.ctx.workspace_id;
         match relations::delete(authorized.conn(), workspace_id, args.id).await {
@@ -117,10 +108,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<ListRelationsArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let default = relations::ListRelationsQuery::default();
         let query = relations::ListRelationsQuery {

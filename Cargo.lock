@@ -3806,6 +3806,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4573,7 +4574,7 @@ dependencies = [
 
 [[package]]
 name = "yorishiro-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4601,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "yorishiro-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4634,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "yorishiro-web"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "axum",
  "mime_guess",

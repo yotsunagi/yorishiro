@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
+use std::net::SocketAddr;
 
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::{ConnectInfo, FromRef, FromRequestParts};
 use axum::http::header;
 use axum::http::request::Parts;
 use sqlx::PgConnection;
@@ -12,6 +13,20 @@ use yorishiro_core::services::auth::ApiKeyScope;
 
 use crate::error::ApiError;
 
+/// Emits a `warn` for a request rejected before it reaches a handler (bad/missing key, or
+/// insufficient scope). The access log only records these as anonymous 401/403s, so this is
+/// what lets an operator see credential brute-forcing or a misconfigured client. The presented
+/// key is never logged -- only the caller IP (when `ConnectInfo` is present), the path, and the
+/// reason.
+fn log_auth_rejection(parts: &Parts, err: &YorishiroError) {
+    let client = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    tracing::warn!(client = %client, path = %parts.uri.path(), error = %err, "request rejected during authentication");
+}
+
 /// Shared by both the `AuthContext` and `Authorized<R>` extractors.
 fn extract_bearer_key(parts: &Parts) -> Result<&str, ApiError> {
     parts
@@ -19,7 +34,11 @@ fn extract_bearer_key(parts: &Parts) -> Result<&str, ApiError> {
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(ApiError(YorishiroError::Unauthenticated))
+        .ok_or_else(|| {
+            let err = YorishiroError::Unauthenticated;
+            log_auth_rejection(parts, &err);
+            ApiError(err)
+        })
 }
 
 /// The sole entry point for authenticated requests. Requiring this type as a handler
@@ -39,7 +58,9 @@ where
         let presented_key = extract_bearer_key(parts)?;
 
         let db = TenantDb::from_ref(state);
-        let ctx = auth::authenticate(db.pool(), presented_key).await?;
+        let ctx = auth::authenticate(db.pool(), presented_key)
+            .await
+            .inspect_err(|err| log_auth_rejection(parts, err))?;
 
         // Updating last_used_at is best-effort and doesn't affect the auth result;
         // the request proceeds even if it fails.
@@ -114,7 +135,9 @@ where
         let presented_key = extract_bearer_key(parts)?;
 
         let db = TenantDb::from_ref(state);
-        let (ctx, conn) = auth::authorize(&db, presented_key, R::SCOPE).await?;
+        let (ctx, conn) = auth::authorize(&db, presented_key, R::SCOPE)
+            .await
+            .inspect_err(|err| log_auth_rejection(parts, err))?;
 
         Ok(Authorized {
             ctx,
@@ -146,7 +169,9 @@ where
         let presented_key = extract_bearer_key(parts)?;
 
         let db = TenantDb::from_ref(state);
-        let ctx = auth::authorize_scope(&db, presented_key, R::SCOPE).await?;
+        let ctx = auth::authorize_scope(&db, presented_key, R::SCOPE)
+            .await
+            .inspect_err(|err| log_auth_rejection(parts, err))?;
 
         Ok(Verified {
             ctx,

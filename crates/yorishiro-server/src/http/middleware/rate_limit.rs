@@ -69,6 +69,9 @@ pub async fn enforce(
         .unwrap_or_else(|| "unknown".to_string());
 
     if !limiter.allow(&key) {
+        // Logged so an operator can see abuse (credential/invite-token brute-forcing) that
+        // the access log would otherwise show only as anonymous 429s.
+        tracing::warn!(client = %key, path = %req.uri().path(), "auth rate limit exceeded");
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 

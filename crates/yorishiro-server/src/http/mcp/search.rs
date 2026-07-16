@@ -12,7 +12,7 @@ use yorishiro_core::YorishiroError;
 use yorishiro_core::repositories::search;
 use yorishiro_core::services::auth::ApiKeyScope;
 
-use super::{ScopeOutcome, YorishiroMcpServer, authorize_scope_only, err_to_tool_result, ok_json};
+use super::{YorishiroMcpServer, err_to_tool_result, ok_json, verified};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchEntitiesArgs {
@@ -37,10 +37,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<SearchEntitiesArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let ctx = match authorize_scope_only(&self.state, &parts, ApiKeyScope::Read).await? {
-            ScopeOutcome::Verified(ctx) => ctx,
-            ScopeOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let ctx = verified!(&self.state, &parts, ApiKeyScope::Read);
 
         let default = search::SearchQuery::default();
         let query = search::SearchQuery {

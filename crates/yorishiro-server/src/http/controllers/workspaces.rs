@@ -6,9 +6,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use yorishiro_core::YorishiroError;
 use yorishiro_core::repositories::tenancy::WorkspaceRecord;
 use yorishiro_core::repositories::{entities, relations, schemas, tenancy};
+use yorishiro_core::{ResultExt, YorishiroError};
 
 use crate::error::ApiError;
 use crate::http::controllers::require_tenant_admin;
@@ -123,7 +123,7 @@ pub async fn get_workspace(
         .tenant_db
         .acquire_for_workspace(ctx.tenant_id, workspace.id)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
     let entity_count = entities::count(&mut conn, workspace.id).await?;
     let relation_count = relations::count(&mut conn, workspace.id).await?;
     let schema_count = schemas::count_active(&mut conn, workspace.id).await?;

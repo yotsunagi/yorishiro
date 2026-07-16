@@ -5,11 +5,11 @@ use sqlx::PgPool;
 use tokio::sync::Semaphore;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
-use yorishiro_core::YorishiroError;
+use yorishiro_core::ResultExt;
 use yorishiro_core::db::TenantDb;
 use yorishiro_core::repositories::entities::EntityRecord;
 use yorishiro_core::services::embedding::EmbeddingProvider;
-use yorishiro_core::services::embedding_sync;
+use yorishiro_core::services::embedding::sync as embedding_sync;
 
 /// Cap on concurrent background embedding syncs. Each sync task holds a pool connection for
 /// the duration of the embedding API call (up to tens of seconds), so spawning without limit
@@ -88,7 +88,7 @@ impl AppState {
                 let mut conn = db
                     .acquire_for_workspace(tenant_id, workspace_id)
                     .await
-                    .map_err(|err| YorishiroError::Internal(err.into()))?;
+                    .internal()?;
                 embedding_sync::sync_embedding_for_record(
                     &mut conn,
                     workspace_id,

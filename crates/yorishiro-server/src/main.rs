@@ -74,6 +74,7 @@ async fn run(cli: Cli) -> Result<()> {
     sqlx::migrate!("../../migrations")
         .run(&identity_pool)
         .await?;
+    tracing::info!("database connected and migrations applied");
 
     let tenant_db = TenantDb::connect(&database_url, 20).await?;
     let embedding_provider = build_embedding_provider()?;

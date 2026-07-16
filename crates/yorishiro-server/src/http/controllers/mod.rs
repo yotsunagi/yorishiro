@@ -1,11 +1,13 @@
 mod entities;
 mod export;
+pub(crate) mod health;
 mod identity;
 mod members;
 mod relations;
 mod schemas;
 mod search;
 mod setup;
+pub(crate) mod whoami;
 mod workspaces;
 
 use axum::Router;

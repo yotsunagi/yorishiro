@@ -5,9 +5,9 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use yorishiro_core::YorishiroError;
 use yorishiro_core::repositories::tenancy::{self, MembershipRole};
 use yorishiro_core::services::auth::{self, ApiKeyScope};
+use yorishiro_core::{ResultExt, YorishiroError};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -183,11 +183,7 @@ pub async fn login(
             hint: "ask a tenant admin to add you as a member first".into(),
         })?;
 
-    let mut conn = state
-        .identity_pool
-        .acquire()
-        .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let mut conn = state.identity_pool.acquire().await.internal()?;
     let created =
         auth::create_api_key(&mut conn, workspace.id, role.max_scope(), Some(user.id)).await?;
 

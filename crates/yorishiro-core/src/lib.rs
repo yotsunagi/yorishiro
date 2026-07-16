@@ -6,7 +6,7 @@ pub mod repositories;
 pub mod services;
 pub mod templates;
 
-pub use error::YorishiroError;
+pub use error::{ResultExt, YorishiroError};
 
 /// Shared test-only fixtures. `tenancy::create_tenant`/`create_workspace` themselves depend on
 /// `PgPool` and enforce caps unrelated to what most other modules' tests need, so this crosses

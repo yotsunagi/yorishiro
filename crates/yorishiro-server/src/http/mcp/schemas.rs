@@ -15,7 +15,7 @@ use yorishiro_core::repositories::schemas;
 use yorishiro_core::services::auth::ApiKeyScope;
 use yorishiro_core::templates;
 
-use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
+use super::{AuthzOutcome, YorishiroMcpServer, authorize, authorized, err_to_tool_result, ok_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetActiveSchemaArgs {
@@ -58,10 +58,7 @@ impl YorishiroMcpServer {
         &self,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         match schemas::list(authorized.conn(), workspace_id).await {
@@ -78,10 +75,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<GetActiveSchemaArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         match schemas::get_active_schema(authorized.conn(), workspace_id, &args.name).await {
@@ -98,10 +92,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<GetSchemaByIdArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         match schemas::get_by_id(authorized.conn(), workspace_id, args.schema_id).await {
@@ -119,10 +110,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<CreateSchemaArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Schema).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Schema);
 
         let definition: MetaSchemaDefinition = match (args.definition, args.template_id) {
             (Some(_), Some(_)) => {
@@ -194,10 +182,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<GetEntityTypeJsonSchemaArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         let record =

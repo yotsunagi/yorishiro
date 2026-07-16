@@ -4,5 +4,3 @@
 
 pub mod auth;
 pub mod embedding;
-pub mod embedding_onnx;
-pub mod embedding_sync;

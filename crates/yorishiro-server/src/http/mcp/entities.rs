@@ -12,7 +12,7 @@ use uuid::Uuid;
 use yorishiro_core::repositories::entities;
 use yorishiro_core::services::auth::ApiKeyScope;
 
-use super::{AuthzOutcome, YorishiroMcpServer, authorize, err_to_tool_result, ok_json};
+use super::{YorishiroMcpServer, authorized, err_to_tool_result, ok_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateEntityArgs {
@@ -60,10 +60,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<CreateEntityArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Write).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Write);
 
         let input = entities::CreateEntityInput {
             schema_name: args.schema_name,
@@ -92,10 +89,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<GetEntityArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let workspace_id = authorized.ctx.workspace_id;
         match entities::get(authorized.conn(), workspace_id, args.id).await {
@@ -110,10 +104,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<UpdateEntityArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Write).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Write);
 
         let workspace_id = authorized.ctx.workspace_id;
         let updated_by = authorized.ctx.user_id;
@@ -144,10 +135,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<DeleteEntityArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Write).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Write);
 
         let workspace_id = authorized.ctx.workspace_id;
         match entities::delete(authorized.conn(), workspace_id, args.id).await {
@@ -162,10 +150,7 @@ impl YorishiroMcpServer {
         Parameters(args): Parameters<ListEntitiesArgs>,
         Extension(parts): Extension<Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut authorized = match authorize(&self.state, &parts, ApiKeyScope::Read).await? {
-            AuthzOutcome::Authorized(a) => a,
-            AuthzOutcome::ScopeDenied(result) => return Ok(result),
-        };
+        let mut authorized = authorized!(&self.state, &parts, ApiKeyScope::Read);
 
         let default = entities::ListEntitiesQuery::default();
         let query = entities::ListEntitiesQuery {

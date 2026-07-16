@@ -1,6 +1,6 @@
 use axum::http::header;
 use axum::response::IntoResponse;
-use yorishiro_core::YorishiroError;
+use yorishiro_core::ResultExt;
 use yorishiro_core::repositories::export;
 
 use crate::error::ApiError;
@@ -26,8 +26,7 @@ pub async fn export_jsonl(
 
     let mut body = Vec::new();
     for record in &records {
-        serde_json::to_writer(&mut body, record)
-            .map_err(|err| YorishiroError::Internal(err.into()))?;
+        serde_json::to_writer(&mut body, record).internal()?;
         body.push(b'\n');
     }
 

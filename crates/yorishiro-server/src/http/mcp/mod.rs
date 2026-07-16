@@ -153,3 +153,34 @@ pub(super) fn ok_json(value: impl serde::Serialize) -> Result<CallToolResult, Er
         .map_err(|err| ErrorData::internal_error(err.to_string(), None))?;
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
+
+/// Authenticates the caller and verifies scope, acquiring an RLS-scoped DB connection. Expands
+/// to the `Authorized` value on success; on a scope-denied outcome it early-returns the tool
+/// result. A macro rather than a function because it early-returns from the enclosing handler
+/// (which must return `Result<CallToolResult, ErrorData>`).
+macro_rules! authorized {
+    ($state:expr, $parts:expr, $scope:expr) => {
+        match $crate::http::mcp::authorize($state, $parts, $scope).await? {
+            $crate::http::mcp::AuthzOutcome::Authorized(authorized) => authorized,
+            $crate::http::mcp::AuthzOutcome::ScopeDenied(result) => {
+                return ::core::result::Result::Ok(result);
+            }
+        }
+    };
+}
+pub(crate) use authorized;
+
+/// Connection-less counterpart to `authorized!`, for handlers (search) that do slow work before
+/// touching the DB. Expands to the `AuthContext` on success, else early-returns the scope-denied
+/// result.
+macro_rules! verified {
+    ($state:expr, $parts:expr, $scope:expr) => {
+        match $crate::http::mcp::authorize_scope_only($state, $parts, $scope).await? {
+            $crate::http::mcp::ScopeOutcome::Verified(ctx) => ctx,
+            $crate::http::mcp::ScopeOutcome::ScopeDenied(result) => {
+                return ::core::result::Result::Ok(result);
+            }
+        }
+    };
+}
+pub(crate) use verified;

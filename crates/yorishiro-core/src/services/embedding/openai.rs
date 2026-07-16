@@ -3,31 +3,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::error::YorishiroError;
+use super::EmbeddingProvider;
+use crate::error::{ResultExt, YorishiroError};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Provider that generates embedding vectors.
-/// The `entities.embedding` column is fixed at `vector(768)`, so an implementation
-/// actually wired to a tenant must have its caller verify (at config load time)
-/// that `dimensions()` returns 768.
-#[async_trait]
-pub trait EmbeddingProvider: Send + Sync {
-    fn dimensions(&self) -> usize;
-
-    /// Must return vectors in the same order and count as the input.
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, YorishiroError>;
-
-    /// Default implementation delegates to `embed_batch`.
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, YorishiroError> {
-        let batch = self.embed_batch(&[text]).await?;
-        batch.into_iter().next().ok_or_else(|| {
-            YorishiroError::Internal(anyhow::anyhow!(
-                "embedding provider returned no vectors for a single input"
-            ))
-        })
-    }
-}
 
 pub struct OpenAiCompatibleConfig {
     /// Example: `https://api.openai.com/v1` (a trailing `/` is optional).
@@ -108,7 +87,7 @@ impl EmbeddingProvider for OpenAiCompatibleProvider {
             })
             .send()
             .await
-            .map_err(|err| YorishiroError::Internal(err.into()))?;
+            .internal()?;
 
         let status = response.status();
         if !status.is_success() {
@@ -118,10 +97,7 @@ impl EmbeddingProvider for OpenAiCompatibleProvider {
             )));
         }
 
-        let parsed: EmbeddingsResponse = response
-            .json()
-            .await
-            .map_err(|err| YorishiroError::Internal(err.into()))?;
+        let parsed: EmbeddingsResponse = response.json().await.internal()?;
 
         let vectors: Vec<Vec<f32>> = parsed.data.into_iter().map(|d| d.embedding).collect();
 

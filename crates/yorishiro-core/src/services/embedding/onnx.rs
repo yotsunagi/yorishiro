@@ -8,8 +8,8 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
+use super::EmbeddingProvider;
 use crate::error::YorishiroError;
-use crate::services::embedding::EmbeddingProvider;
 
 /// Lower bound for `max_sequence_length`. tokenizers subtracts the number of
 /// special tokens (2-3 for BERT-family models) from `max_length` during

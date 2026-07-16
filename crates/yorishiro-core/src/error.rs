@@ -34,3 +34,13 @@ pub struct ValidationDetail {
     pub field: String,
     pub problem: String,
 }
+
+pub trait ResultExt<T> {
+    fn internal(self) -> Result<T, YorishiroError>;
+}
+
+impl<T, E: Into<anyhow::Error>> ResultExt<T> for Result<T, E> {
+    fn internal(self) -> Result<T, YorishiroError> {
+        self.map_err(|err| YorishiroError::Internal(err.into()))
+    }
+}

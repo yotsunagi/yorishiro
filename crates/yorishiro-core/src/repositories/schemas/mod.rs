@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::{Connection, PgConnection};
 use uuid::Uuid;
 
-use crate::error::YorishiroError;
+use crate::error::{ResultExt, YorishiroError};
 use crate::metaschema::{self, MetaSchemaDefinition, VersioningDiff, validate_definition};
 
 pub use crate::models::schemas::*;
@@ -35,8 +35,7 @@ struct SchemaRow {
 
 impl SchemaRow {
     fn into_record(self) -> Result<SchemaRecord, YorishiroError> {
-        let definition = serde_json::from_value(self.definition)
-            .map_err(|err| YorishiroError::Internal(err.into()))?;
+        let definition = serde_json::from_value(self.definition).internal()?;
         Ok(SchemaRecord {
             id: self.id,
             workspace_id: self.workspace_id,
@@ -72,7 +71,7 @@ pub async fn list(
     sqlx::query_as_with::<_, SchemaSummary, _>(&sql, values)
         .fetch_all(&mut *conn)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))
+        .internal()
 }
 
 /// Counts a workspace's currently *active* schemas -- one row per distinct schema name, since
@@ -92,7 +91,7 @@ pub async fn count_active(
     let (count,): (i64,) = sqlx::query_as_with(&sql, values)
         .fetch_one(&mut *conn)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
     Ok(count)
 }
 
@@ -127,7 +126,7 @@ pub async fn get_active_schema(
     let row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
         .fetch_optional(&mut *conn)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
     match row {
         Some(row) => row.into_record(),
@@ -153,7 +152,7 @@ pub async fn get_by_id(
     let row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
         .fetch_optional(&mut *conn)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
     match row {
         Some(row) => row.into_record(),
@@ -179,7 +178,7 @@ pub async fn export_all(
     let rows: Vec<SchemaRow> = sqlx::query_as_with(&sql, values)
         .fetch_all(&mut *conn)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
     rows.into_iter().map(SchemaRow::into_record).collect()
 }
@@ -202,10 +201,7 @@ pub async fn create_schema(
 
     let name = definition.name.clone();
 
-    let mut tx = conn
-        .begin()
-        .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    let mut tx = conn.begin().await.internal()?;
 
     // `pg_advisory_xact_lock(...)` is a lock-acquisition function call, not a table operation --
     // no SELECT/INSERT/UPDATE/DELETE form exists for sea-query to build, same category as the
@@ -214,7 +210,7 @@ pub async fn create_schema(
         .bind(format!("{workspace_id}:{name}"))
         .execute(&mut *tx)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
     let (sql, values) = Query::select()
         .columns(schema_columns())
@@ -228,7 +224,7 @@ pub async fn create_schema(
     let previous_row: Option<SchemaRow> = sqlx::query_as_with(&sql, values)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
     let (next_version, diff) = match previous_row {
         Some(row) => {
@@ -255,10 +251,9 @@ pub async fn create_schema(
     sqlx::query_with(&sql, values)
         .execute(&mut *tx)
         .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+        .internal()?;
 
-    let definition_json =
-        serde_json::to_value(&definition).map_err(|err| YorishiroError::Internal(err.into()))?;
+    let definition_json = serde_json::to_value(&definition).internal()?;
 
     let (sql, values) = Query::insert()
         .into_table((Alias::new("content"), Schemas::Table))
@@ -296,108 +291,10 @@ pub async fn create_schema(
             }
         })?;
 
-    tx.commit()
-        .await
-        .map_err(|err| YorishiroError::Internal(err.into()))?;
+    tx.commit().await.internal()?;
 
     Ok((row.into_record()?, diff))
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-    use sqlx::PgPool;
-
-    use super::*;
-    use crate::db::TenantDb;
-
-    fn task_schema(with_priority: bool) -> MetaSchemaDefinition {
-        let fields = if with_priority {
-            json!({
-                "title": { "type": "string", "required": true },
-                "priority": { "type": "integer" }
-            })
-        } else {
-            json!({ "title": { "type": "string", "required": true } })
-        };
-        serde_json::from_value(json!({
-            "name": "task-management",
-            "entity_types": { "task": { "fields": fields } }
-        }))
-        .unwrap()
-    }
-
-    async fn seed_workspace(pool: &PgPool) -> (Uuid, Uuid) {
-        crate::test_support::seed_tenant_and_workspace(pool).await
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn creates_first_version_as_active(pool: PgPool) {
-        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
-        let db = TenantDb::new(pool);
-        let mut conn = db
-            .acquire_for_workspace(workspace_id_tenant, workspace_id)
-            .await
-            .unwrap();
-
-        let (record, diff) = create_schema(&mut conn, workspace_id, task_schema(false))
-            .await
-            .unwrap();
-        assert_eq!(record.version, 1);
-        assert_eq!(record.status, "active");
-        assert!(!diff.is_breaking);
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn creating_new_version_archives_previous_and_reports_breaking_diff(pool: PgPool) {
-        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
-        let db = TenantDb::new(pool);
-        let mut conn = db
-            .acquire_for_workspace(workspace_id_tenant, workspace_id)
-            .await
-            .unwrap();
-
-        let (v1, _) = create_schema(&mut conn, workspace_id, task_schema(false))
-            .await
-            .unwrap();
-
-        let mut required_priority = task_schema(true);
-        required_priority
-            .entity_types
-            .get_mut("task")
-            .unwrap()
-            .fields
-            .get_mut("priority")
-            .unwrap()
-            .required = true;
-
-        let (v2, diff) = create_schema(&mut conn, workspace_id, required_priority)
-            .await
-            .unwrap();
-        assert_eq!(v2.version, 2);
-        assert!(diff.is_breaking, "reasons: {:?}", diff.reasons);
-
-        let archived = get_by_id(&mut conn, workspace_id, v1.id).await.unwrap();
-        assert_eq!(archived.status, "archived");
-
-        let active = get_active_schema(&mut conn, workspace_id, "task-management")
-            .await
-            .unwrap();
-        assert_eq!(active.id, v2.id);
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn get_active_schema_reports_not_found_when_absent(pool: PgPool) {
-        let (workspace_id_tenant, workspace_id) = seed_workspace(&pool).await;
-        let db = TenantDb::new(pool);
-        let mut conn = db
-            .acquire_for_workspace(workspace_id_tenant, workspace_id)
-            .await
-            .unwrap();
-
-        let err = get_active_schema(&mut conn, workspace_id, "does-not-exist")
-            .await
-            .unwrap_err();
-        assert!(matches!(err, YorishiroError::NotFound { .. }));
-    }
-}
+mod tests;
