@@ -9,7 +9,7 @@
 # network access (for air-gapped builds, see ORT_LIB_LOCATION in the README).
 # The SPA is embedded into the binary from `ee/web/dist`, which is a build output and is not
 # committed -- so it is built first, in its own stage, and copied into the cargo build.
-FROM node:24-slim AS web
+FROM node:26-slim AS web
 RUN corepack enable
 WORKDIR /web
 COPY ee/web/package.json ee/web/pnpm-lock.yaml ./
